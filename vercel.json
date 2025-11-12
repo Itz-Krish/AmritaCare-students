@@ -1,7 +1,6 @@
 {
   "buildCommand": "npm install",
   "env": {
-    "OPENAI_API_KEY": "@openai_api_key",
     "VITE_FIREBASE_API_KEY": "@firebase_api_key",
     "VITE_FIREBASE_AUTH_DOMAIN": "@firebase_auth_domain",
     "VITE_FIREBASE_PROJECT_ID": "@firebase_project_id",

@@ -124,8 +124,6 @@ VITE_FORMSUBMIT_EMAIL=singhkrish.np@gmail.com
 Your complete `.env` file should look like:
 
 ```
-# OpenAI (if using GPT chat)
-OPENAI_API_KEY=sk-REPLACE_WITH_YOUR_KEY
 PORT=3000
 
 # Firebase

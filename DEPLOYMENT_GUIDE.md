@@ -112,7 +112,6 @@ These are correct! Click **"Deploy"**... but WAIT! We need environment variables
 2. Add each variable:
 
 ```
-OPENAI_API_KEY = sk-your-actual-key
 VITE_FIREBASE_API_KEY = your-firebase-api-key
 VITE_FIREBASE_AUTH_DOMAIN = your-project.firebaseapp.com
 VITE_FIREBASE_PROJECT_ID = your-project-id

@@ -88,7 +88,6 @@ git pull origin main
 ## 🔑 Environment Variables Needed
 
 ```
-OPENAI_API_KEY=sk-your-key-here
 VITE_FIREBASE_API_KEY=your-key
 VITE_FIREBASE_AUTH_DOMAIN=your-domain.firebaseapp.com
 VITE_FIREBASE_PROJECT_ID=your-project-id

@@ -2141,13 +2141,18 @@ function renderChatMessages(){
     console.warn('[DEBUG] chatWindow element not found in DOM');
     return;
   }
-  w.innerHTML = '';
 
   // Prefer Firebase-backed messages when available (set on window.chatMessages by the Firebase listener)
   const sourceMsgs = Array.isArray(window.chatMessages) ? window.chatMessages : chatMessages;
 
+  console.log('[DEBUG] renderChatMessages called with', sourceMsgs ? sourceMsgs.length : 0, 'messages');
+
+  // Clear previous content
+  w.innerHTML = '';
+
   if(!sourceMsgs || sourceMsgs.length === 0){
     w.innerHTML = '<div class="text-center text-sm muted py-8">No messages yet. Start the conversation!</div>';
+    console.log('[DEBUG] No messages to display');
     return;
   }
 
@@ -3119,9 +3124,10 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
   });
 
   // Also attempt to start chat listener immediately so public/unauthenticated users can see messages
-  try{
-    // First, load server-side messages so chat is never empty on initial load
-    (async ()=>{
+  // Delay to ensure renderChatMessages is available on window object
+  setTimeout(async ()=>{
+    try{
+      // First, load server-side messages so chat is never empty on initial load
       try{
         console.log('[DEBUG] Initial load: fetching /api/messages for immediate chat display');
         const resp = await fetch('/api/messages');
@@ -3131,16 +3137,24 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
             console.log('[DEBUG] Initial /api/messages load:', j.messages.length, 'messages');
             window.chatMessages = j.messages;
             // Call renderChatMessages if it exists globally
-            if(typeof window.renderChatMessages === 'function') window.renderChatMessages();
-            else if(typeof renderChatMessages === 'function') renderChatMessages();
+            console.log('[DEBUG] window.renderChatMessages available?', typeof window.renderChatMessages === 'function');
+            if(typeof window.renderChatMessages === 'function'){
+              window.renderChatMessages();
+            } else {
+              console.warn('[DEBUG] renderChatMessages not available on window object');
+            }
           }
         }
       }catch(e){ console.debug('Initial /api/messages load failed', e); }
-    })();
-    // Then start Firestore listener (which may be blocked by rules, but will provide realtime updates if it works)
-    if(typeof window.startChatListener === 'function') window.startChatListener();
-    else if(typeof startChatListener === 'function') startChatListener();
-  }catch(e){ console.warn('Immediate startChatListener attempt failed:', e); }
+      // Then start Firestore listener (which may be blocked by rules, but will provide realtime updates if it works)
+      console.log('[DEBUG] window.startChatListener available?', typeof window.startChatListener === 'function');
+      if(typeof window.startChatListener === 'function'){
+        window.startChatListener();
+      } else {
+        console.warn('[DEBUG] startChatListener not available on window object');
+      }
+    }catch(e){ console.warn('Immediate startChatListener attempt failed:', e); }
+  }, 100);
 
   // replace login/signup behavior to use Firebase (override previous handlers)
   try{
@@ -3150,7 +3164,18 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
       const email = document.getElementById('loginEmail').value.trim().toLowerCase();
       const pwd = document.getElementById('loginPassword').value;
       if(!email || !pwd){ alert('Enter email and password'); return; }
-      try{ await signInWithEmailAndPassword(auth, email, pwd); closeAuth(); alert('Logged in'); }
+      try{
+        const cred = await signInWithEmailAndPassword(auth, email, pwd);
+        // Immediately update UI before waiting for onAuthStateChanged listener
+        const user = cred.user;
+        let name = user.displayName || '';
+        try{ const ud = await getDoc(doc(db,'users', user.uid)); if(ud.exists() && ud.data().name) name = ud.data().name; }catch(e){}
+        setCurrentUser({ uid: user.uid, email: user.email, name });
+        // Also start chat listener immediately
+        try{ startChatListener(); }catch(e){ console.error('startChatListener after login failed', e); }
+        closeAuth();
+        alert('Logged in');
+      }
       catch(err){ console.error(err); alert('Login failed: '+err.message); }
     }); }
 
@@ -3204,6 +3229,9 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
                   // Mark the Firestore users doc as OTP-verified so onAuthStateChanged allows login
                   await setDoc(doc(db,'users', cred.user.uid), { name: pending.name, email: pending.email, otpVerified: true, createdAt: serverTimestamp() });
                   console.log('Firestore user doc created (otpVerified:true)');
+                  // Immediately update UI before closing auth modal
+                  setCurrentUser({ uid: cred.user.uid, email: cred.user.email, name: pending.name });
+                  try{ startChatListener(); }catch(e){ console.error('startChatListener after signup failed', e); }
                   closeAuth();
                   pending = null;
                   document.getElementById('otpInput').value = '';
@@ -3217,6 +3245,10 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
                       console.log('Signed in successfully');
                       // Ensure users doc marks otpVerified so the auth listener won't sign the user out
                       try{ await setDoc(doc(db,'users', signed.user.uid), { name: pending.name || signed.user.displayName || '', email: pending.email, otpVerified: true }, { merge: true }); }catch(e){ console.warn('Failed to set otpVerified on existing user', e); }
+                      // Immediately update UI before closing auth modal
+                      const userName = pending.name || signed.user.displayName || '';
+                      setCurrentUser({ uid: signed.user.uid, email: signed.user.email, name: userName });
+                      try{ startChatListener(); }catch(e){ console.error('startChatListener after login failed', e); }
                       closeAuth();
                       pending = null;
                       document.getElementById('otpInput').value = '';

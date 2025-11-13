@@ -8,7 +8,20 @@
     "[DEBUG] window._firebase set true",
     "[DEBUG] Initial load: fetching /api/messages for immediate chat display",
     "[DEBUG] startChatListener - setting up listener on chats collection",
-    "[DEBUG] Initial /api/messages load: 10 messages",
+    "[DEBUG] Initial /api/messages load: 14 messages",
+    "[DEBUG] onAuthStateChanged - user: ",
+    "[DEBUG] updateAuthGates - session user:  firebaseUser: ",
+    "[DEBUG] updateAuthGates - session user:  firebaseUser: ",
+    "Video playing successfully",
+    "cdn.tailwindcss.com should not be used in production. To use Tailwind CSS in production, install it as a PostCSS plugin or use the Tailwind CLI: https://tailwindcss.com/docs/installation",
+    "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+    "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+    "[DEBUG] /api/firebase-config response: JSHandle@object",
+    "[DEBUG] Initializing Firebase with config (masked): JSHandle@object",
+    "[DEBUG] window._firebase set true",
+    "[DEBUG] Initial load: fetching /api/messages for immediate chat display",
+    "[DEBUG] startChatListener - setting up listener on chats collection",
+    "[DEBUG] Initial /api/messages load: 14 messages",
     "[DEBUG] onAuthStateChanged - user: ",
     "[DEBUG] updateAuthGates - session user:  firebaseUser: ",
     "[DEBUG] updateAuthGates - session user:  firebaseUser: ",
@@ -20,7 +33,13 @@
     "[DEBUG] sendBtn clicked JSHandle@object"
   ],
   "errors": [],
-  "network": [],
+  "network": [
+    {
+      "type": "response",
+      "url": "http://localhost:3000/api/firebase-config",
+      "status": 304
+    }
+  ],
   "firebaseInit": {
     "windowFirebase": true,
     "hasAuth": true,
@@ -28,10 +47,10 @@
     "authInitialized": true,
     "dbInitialized": true,
     "useFirebaseAuth": true,
-    "chatMessagesCount": 10
+    "chatMessagesCount": 14
   },
   "chatMessages": {
-    "count": 10,
+    "count": 14,
     "messages": [
       {
         "from": "Test User",
@@ -60,7 +79,7 @@
     ],
     "chatWindowHTML": "<div class=\"chat-message-other\"><div class=\"chat-avatar\">TU</div><div class=\"chat-content\"><div class=\"chat-header\"><strong>Test User</strong> <span class=\"chat-time\">7:10:38 PM</span></div><div class",
     "afterSend": {
-      "messages": 11,
+      "messages": 15,
       "html": "<div class=\"chat-message-other\"><div class=\"chat-avatar\">TU</div><div class=\"chat-content\"><div class=\"chat-header\"><strong>Test User</strong> <span class=\"chat-time\">7:10:38 PM</span></div><div class=\"chat-bubble-other\"><div class=\"text-sm\">hello from ps</div></div><div class=\"chat-actions\"><button"
     }
   }

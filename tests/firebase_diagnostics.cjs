@@ -41,8 +41,12 @@ const fs = require('fs');
     await page.goto('http://localhost:3000', { waitUntil: 'networkidle2', timeout: 60000 });
     console.log('✅ Page loaded');
 
+    // Hard refresh to clear any cached Firestore rules
+    await page.reload({ waitUntil: 'networkidle2' });
+    console.log('✅ Page reloaded');
+
     // Wait longer for listeners to initialize and fire
-    await new Promise(r => setTimeout(r, 8000));
+    await new Promise(r => setTimeout(r, 10000));
 
     // Check Firebase initialization
     diagnostics.firebaseInit = await page.evaluate(() => {

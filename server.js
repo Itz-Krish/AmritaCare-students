@@ -9,6 +9,7 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import crypto from 'crypto';
+import fetch from 'node-fetch';
 
 dotenv.config();
 
@@ -118,6 +119,70 @@ app.post('/api/cloudinary-sign', (req, res) => {
   const toSign = `timestamp=${timestamp}`;
   const signature = crypto.createHash('sha1').update(toSign + apiSecret).digest('hex');
   res.json({ signature, timestamp, api_key: apiKey, cloud_name: cloudName });
+});
+
+// --- OTP via Email (SendGrid) ---
+function base64url(str){ return Buffer.from(str).toString('base64').replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_'); }
+function base64urlDecode(b64){ return Buffer.from(b64.replace(/-/g,'+').replace(/_/g,'/'),'base64').toString('utf8'); }
+function signPayload(payload, secret){ return crypto.createHmac('sha256', secret).update(payload).digest('hex'); }
+
+app.post('/api/send-otp', async (req, res) => {
+  try{
+    const { email, name } = req.body || {};
+    if(!email) return res.status(400).json({ error: 'missing_email' });
+
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const expiry = Date.now() + (10 * 60 * 1000); // 10 minutes
+
+    const payload = JSON.stringify({ email, otp, expiry });
+    const secret = process.env.OTP_SECRET || process.env.ADMIN_MANAGE_TOKEN;
+    if(!secret) return res.status(500).json({ error: 'otp_secret_not_configured' });
+    const signature = signPayload(payload, secret);
+    const token = `${base64url(payload)}.${signature}`;
+
+    // Send via SendGrid
+    const sendgridKey = process.env.SENDGRID_API_KEY;
+    const fromEmail = process.env.SENDGRID_FROM || process.env.VITE_FORMSUBMIT_EMAIL;
+    if(!sendgridKey || !fromEmail) return res.status(500).json({ error: 'email_not_configured' });
+
+    const msg = {
+      personalizations: [{ to: [{ email }] }],
+      from: { email: fromEmail },
+      subject: 'Your AmritaCare OTP',
+      content: [{ type: 'text/plain', value: `Hello ${name || ''},\n\nYour AmritaCare OTP is: ${otp}\nIt expires in 10 minutes.` }]
+    };
+
+    const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: { 'authorization': `Bearer ${sendgridKey}`, 'content-type':'application/json' },
+      body: JSON.stringify(msg)
+    });
+
+    if(!sgRes.ok){ const text = await sgRes.text(); console.error('SendGrid error', text); return res.status(500).json({ error: 'email_send_failed', detail: text }); }
+
+    return res.json({ success: true, token });
+  }catch(err){ console.error('send-otp', err); return res.status(500).json({ error: 'server_error' }); }
+});
+
+app.post('/api/verify-otp', (req, res) => {
+  try{
+    const { token, otp } = req.body || {};
+    if(!token || !otp) return res.status(400).json({ error: 'missing_params' });
+    const secret = process.env.OTP_SECRET || process.env.ADMIN_MANAGE_TOKEN;
+    if(!secret) return res.status(500).json({ error: 'otp_secret_not_configured' });
+
+    const parts = token.split('.'); if(parts.length !== 2) return res.status(400).json({ error: 'invalid_token' });
+    const payloadB64 = parts[0]; const sig = parts[1];
+    const payloadJson = base64urlDecode(payloadB64);
+    const expectedSig = signPayload(payloadJson, secret);
+    if(!crypto.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(sig))) return res.status(400).json({ error: 'invalid_signature' });
+
+    const payload = JSON.parse(payloadJson);
+    if(Date.now() > payload.expiry) return res.status(400).json({ error: 'expired' });
+    if(String(payload.otp) !== String(otp)) return res.status(400).json({ error: 'invalid_otp' });
+
+    return res.json({ success: true, email: payload.email });
+  }catch(err){ console.error('verify-otp', err); return res.status(500).json({ error: 'server_error' }); }
 });
 
 // Serve SPA fallback

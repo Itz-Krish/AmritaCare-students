@@ -2681,21 +2681,62 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
     }); }
 
     const _signupForm = document.getElementById('signupForm');
-    if(_signupForm){ _signupForm.addEventListener('submit', async (e)=>{
-      e.preventDefault();
-      const name = document.getElementById('signupName').value.trim();
-      const email = document.getElementById('signupEmail').value.trim().toLowerCase();
-      const pwd = document.getElementById('signupPassword').value;
-      if(!name || !email || !pwd){ alert('Fill all fields'); return; }
-      try{
-        const cred = await createUserWithEmailAndPassword(auth, email, pwd);
-        await updateProfile(cred.user, { displayName: name });
-        await setDoc(doc(db,'users', cred.user.uid), { name, email, createdAt: serverTimestamp() });
-        // Send verification email
-        try{ await sendEmailVerification(cred.user); }catch(e){ console.warn('sendEmailVerification failed', e); }
-        closeAuth(); alert('Account created. A verification email was sent — please check your inbox and verify before logging in.');
-      }catch(err){ console.error(err); alert('Signup failed: '+err.message); }
-    }); }
+    if(_signupForm){
+      // If Firebase auth is enabled we use a server-backed OTP flow before creating the user.
+      if(window._useFirebaseAuth){
+        const sendOtpBtnEl = document.getElementById('sendOtpBtn');
+        const verifyOtpBtnEl = document.getElementById('verifyOtpBtn');
+        let pending = null;
+
+        if(sendOtpBtnEl){
+          sendOtpBtnEl.addEventListener('click', async (e)=>{
+            e.preventDefault();
+            const name = document.getElementById('signupName').value.trim();
+            const email = document.getElementById('signupEmail').value.trim().toLowerCase();
+            const pwd = document.getElementById('signupPassword').value;
+            if(!name || !email || !pwd){ alert('Fill all fields'); return; }
+            try{
+              const r = await fetch('/api/send-otp', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ name, email }) });
+              const j = await r.json();
+              if(!r.ok){ console.error('send-otp failed', j); alert('Failed to send OTP: '+(j.error||j.detail||'server error')); return; }
+              pending = { name, email, password: pwd, token: j.token };
+              otpTarget.innerText = email;
+              openAuth('otp');
+              alert('OTP sent to your email. Please check your inbox.');
+            }catch(err){ console.error('send-otp error', err); alert('Failed to send OTP'); }
+          });
+        }
+
+        if(verifyOtpBtnEl){
+          verifyOtpBtnEl.addEventListener('click', async ()=>{
+            const code = document.getElementById('otpInput').value.trim();
+            if(!pending){ alert('No signup in progress. Please request an OTP first.'); return; }
+            if(!code || code.length !== 6){ alert('Please enter the 6-digit OTP'); return; }
+            try{
+              const r = await fetch('/api/verify-otp', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ token: pending.token, otp: code }) });
+              const j = await r.json();
+              if(!r.ok){ console.error('verify-otp failed', j); alert('OTP verification failed: '+(j.error||'invalid')); return; }
+              // OTP verified — create Firebase user now
+              try{
+                const cred = await createUserWithEmailAndPassword(auth, pending.email, pending.password);
+                await updateProfile(cred.user, { displayName: pending.name });
+                await setDoc(doc(db,'users', cred.user.uid), { name: pending.name, email: pending.email, createdAt: serverTimestamp() });
+                // Mark email as verified in Firestore user metadata (Firebase client marks emailVerified=false until user clicks link; since OTP verified, we can set a flag)
+                closeAuth();
+                pending = null;
+                document.getElementById('otpInput').value = '';
+                alert('Account created and verified! You can now log in.');
+              }catch(err){ console.error('createUser after OTP failed', err); alert('Failed to create account: '+err.message); }
+            }catch(err){ console.error('verify-otp error', err); alert('OTP verify failed'); }
+          });
+        }
+
+        // Prevent the regular submit from creating user directly
+        _signupForm.addEventListener('submit', (e)=>{ e.preventDefault(); alert('Use the Send OTP button to start signup.'); });
+      } else {
+        // Firebase not enabled: fallback to local/demo signup is handled elsewhere in the page
+      }
+    }
   }catch(e){ console.error('setup auth handlers', e); }
   }
 </script>

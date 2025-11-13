@@ -2836,8 +2836,9 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
     if(unsubscribeChats) return;
     console.log('[DEBUG] startChatListener - setting up listener on chats collection');
     const q = query(collection(db,'chats'), orderBy('timestamp','desc'), limit(30));
-    unsubscribeChats = onSnapshot(q, snap => {
-      console.log('[DEBUG] Firestore chat snapshot received, docs:', snap.size);
+    try{
+      unsubscribeChats = onSnapshot(q, snap => {
+        console.log('[DEBUG] Firestore chat snapshot received, docs:', snap.size);
       const msgs = [];
       snap.forEach(d => { const data = d.data(); msgs.push({ id: d.id, from: data.from, email: data.email, text: data.text, ts: formatTs(data.timestamp), timestamp: data.timestamp, uid: data.uid, reported: data.reported||false }); });
       // reverse to show oldest first
@@ -2858,16 +2859,23 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
             const resp = await fetch('/api/messages');
             if(resp && resp.ok){
               const j = await resp.json();
+              console.log('[DEBUG] /api/messages response:', j);
               if(j && j.success && Array.isArray(j.messages) && j.messages.length > 0){
+                console.log('[DEBUG] Server fallback found', j.messages.length, 'messages');
                 window.chatMessages = j.messages;
                 try{ const s = document.getElementById('chatStatus'); if(s) s.textContent = ''; }catch(e){}
                 renderChatMessages();
                 return;
+              } else {
+                console.log('[DEBUG] Server fallback returned no messages');
               }
+            } else {
+              console.warn('[DEBUG] /api/messages request failed, status:', resp ? resp.status : 'no response');
             }
           }catch(e){ console.debug('Failed to fetch /api/messages fallback after empty snapshot', e); }
 
           // If fallback didn't produce messages, use empty snapshot (show no messages)
+          console.log('[DEBUG] Showing empty chat (no Firestore or server messages)');
           window.chatMessages = msgs;
           try{ const s = document.getElementById('chatStatus'); if(s) s.textContent = ''; }catch(e){}
           renderChatMessages();
@@ -2881,22 +2889,25 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
       try{ const s = document.getElementById('chatStatus'); if(s) s.textContent = ''; }catch(e){}
       renderChatMessages();
     }, err=> {
-      console.error('chat listener',err);
+      console.error('[DEBUG] Firestore chat listener error:', err && err.code ? err.code : 'unknown', err && err.message ? err.message : '');
       try{
         const s = document.getElementById('chatStatus') || (function(){ const el = document.createElement('div'); el.id='chatStatus'; el.style.padding='8px'; el.style.background='#fff3cd'; el.style.color='#856404'; el.style.border='1px solid #ffeeba'; el.style.borderRadius='6px'; el.style.position='fixed'; el.style.right='12px'; el.style.bottom='12px'; el.style.zIndex=9999; document.body.appendChild(el); return el; })();
-        s.textContent = 'Firestore chat listener error: ' + (err && err.message ? err.message : String(err)) + ' — check Firestore rules/permissions.';
+        const msg = (err && err.code === 'permission-denied') ? '🔒 Chat read denied — check Firestore rules.' : 'Firestore chat error — using server fallback.';
+        s.textContent = msg;
       }catch(e2){ console.warn('Failed to render chat status', e2); }
       // fallback: stop listener and try server-side messages, then local
       if(unsubscribeChats){ unsubscribeChats(); unsubscribeChats = null; }
       (async ()=>{
         try{
+          console.log('[DEBUG] Attempting /api/messages fallback after Firestore error');
           const resp = await fetch('/api/messages');
-          if(resp && resp.ok){ const j = await resp.json(); if(j && j.success && Array.isArray(j.messages)){ window.chatMessages = j.messages; renderChatMessages(); return; } }
+          if(resp && resp.ok){ const j = await resp.json(); if(j && j.success && Array.isArray(j.messages)){ console.log('[DEBUG] /api/messages fallback returned', j.messages.length, 'messages'); window.chatMessages = j.messages; renderChatMessages(); return; } }
         }catch(e){ console.debug('Failed to fetch /api/messages fallback', e); }
         window.chatMessages = window.chatMessages || JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || '[]');
         renderChatMessages();
       })();
     });
+    }catch(e){ console.error('[DEBUG] startChatListener setup failed:', e); }
   }
 
   function stopChatListener(){ if(unsubscribeChats){ unsubscribeChats(); unsubscribeChats = null; } }
@@ -3029,6 +3040,22 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
 
   // Also attempt to start chat listener immediately so public/unauthenticated users can see messages
   try{
+    // First, load server-side messages so chat is never empty on initial load
+    (async ()=>{
+      try{
+        console.log('[DEBUG] Initial load: fetching /api/messages for immediate chat display');
+        const resp = await fetch('/api/messages');
+        if(resp && resp.ok){
+          const j = await resp.json();
+          if(j && j.success && Array.isArray(j.messages) && j.messages.length > 0){
+            console.log('[DEBUG] Initial /api/messages load:', j.messages.length, 'messages');
+            window.chatMessages = j.messages;
+            renderChatMessages();
+          }
+        }
+      }catch(e){ console.debug('Initial /api/messages load failed', e); }
+    })();
+    // Then start Firestore listener (which may be blocked by rules, but will provide realtime updates if it works)
     startChatListener();
   }catch(e){ console.warn('Immediate startChatListener attempt failed:', e); }
 

@@ -2137,6 +2137,10 @@ function saveChatMessage(msg){
 
 function renderChatMessages(){
   const w = document.getElementById('chatWindow');
+  if(!w){
+    console.warn('[DEBUG] chatWindow element not found in DOM');
+    return;
+  }
   w.innerHTML = '';
 
   // Prefer Firebase-backed messages when available (set on window.chatMessages by the Firebase listener)
@@ -2227,6 +2231,9 @@ function renderChatMessages(){
   // Keep scroll at bottom
   w.scrollTop = w.scrollHeight;
 }
+
+// Expose renderChatMessages to window for cross-scope access
+window.renderChatMessages = renderChatMessages;
 
 function clearAllChats(){
   if(chatMessages.length === 0) return;
@@ -2978,6 +2985,9 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
     });
     }catch(e){ console.error('[DEBUG] startChatListener setup failed:', e); }
   }
+  
+  // Expose to window for cross-scope access
+  window.startChatListener = startChatListener;
 
   function stopChatListener(){ if(unsubscribeChats){ unsubscribeChats(); unsubscribeChats = null; } }
 
@@ -3120,13 +3130,16 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
           if(j && j.success && Array.isArray(j.messages) && j.messages.length > 0){
             console.log('[DEBUG] Initial /api/messages load:', j.messages.length, 'messages');
             window.chatMessages = j.messages;
-            renderChatMessages();
+            // Call renderChatMessages if it exists globally
+            if(typeof window.renderChatMessages === 'function') window.renderChatMessages();
+            else if(typeof renderChatMessages === 'function') renderChatMessages();
           }
         }
       }catch(e){ console.debug('Initial /api/messages load failed', e); }
     })();
     // Then start Firestore listener (which may be blocked by rules, but will provide realtime updates if it works)
-    startChatListener();
+    if(typeof window.startChatListener === 'function') window.startChatListener();
+    else if(typeof startChatListener === 'function') startChatListener();
   }catch(e){ console.warn('Immediate startChatListener attempt failed:', e); }
 
   // replace login/signup behavior to use Firebase (override previous handlers)

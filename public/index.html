@@ -1060,6 +1060,16 @@ function setCurrentUser(u){
   try{ updateAdminUI(); }catch(e){}
 }
 function getCurrentUser(){ try{ return JSON.parse(sessionStorage.getItem('mh_current')||'null'); }catch(e){ return null; } }
+// Returns the effective logged-in user (Firebase user if present, otherwise sessionStorage user)
+function getEffectiveUser(){
+  try{
+    if(window._firebase && window._firebase.auth && window._firebase.auth.currentUser){
+      const fbUser = window._firebase.auth.currentUser;
+      return { uid: fbUser.uid, email: fbUser.email, name: fbUser.displayName || (fbUser.email||'').split('@')[0] };
+    }
+    return JSON.parse(sessionStorage.getItem('mh_current')||'null');
+  }catch(e){ return null; }
+}
 function logout(showAlert){ 
   sessionStorage.removeItem('mh_current'); 
   document.getElementById('profileBtn').classList.add('hidden'); 
@@ -1073,16 +1083,17 @@ function logout(showAlert){
 function updateAuthGates(){
   const user = getCurrentUser();
   const logged = !!user;
+  console.log('[DEBUG] updateAuthGates - session user:', user, 'firebaseUser:', (window._firebase && window._firebase.auth && window._firebase.auth.currentUser) || null);
 
   // Chat controls — keep accessible but intercept interactions when not logged in
   const messageInput = document.getElementById('messageInput');
   const sendBtn = document.getElementById('sendBtn');
   const clearChatBtn = document.getElementById('clearChatBtn');
-  if(messageInput){
+      if(messageInput){
     messageInput.placeholder = logged ? 'Type a message...' : 'Login to send messages';
     // focus/click should prompt login when not logged
     if(!messageInput._authInterceptor){
-      messageInput.addEventListener('focus', ()=>{ if(!getCurrentUser()) openAuth('login'); });
+      messageInput.addEventListener('focus', ()=>{ if(!getEffectiveUser()) openAuth('login'); });
       messageInput._authInterceptor = true;
     }
   }
@@ -1090,7 +1101,7 @@ function updateAuthGates(){
   function addClickInterceptor(el){
     if(!el || el._authClickInterceptor) return;
     el.addEventListener('click', (e)=>{
-      if(!getCurrentUser()){
+      if(!getEffectiveUser()){
         e.preventDefault();
         openAuth('login');
       }
@@ -1104,8 +1115,8 @@ function updateAuthGates(){
   if(clearChatBtn){
     clearChatBtn.title = logged ? '' : 'Login to clear messages';
     // if logged in, ensure clearAllChats still works
-    if(!clearChatBtn._clearHandler){
-      clearChatBtn.addEventListener('click', (e)=>{ if(getCurrentUser()){ clearAllChats(); } });
+      if(!clearChatBtn._clearHandler){
+      clearChatBtn.addEventListener('click', (e)=>{ if(getEffectiveUser()){ clearAllChats(); } });
       clearChatBtn._clearHandler = true;
     }
     addClickInterceptor(clearChatBtn);
@@ -1119,14 +1130,14 @@ function updateAuthGates(){
   if(shareMessage) {
     // focusing while logged out prompts login
     if(!shareMessage._authInterceptor){
-      shareMessage.addEventListener('focus', ()=>{ if(!getCurrentUser()) openAuth('login'); });
+      shareMessage.addEventListener('focus', ()=>{ if(!getEffectiveUser()) openAuth('login'); });
       shareMessage._authInterceptor = true;
     }
   }
   if(shareFile){
     // clicking file chooser should prompt login when not logged
     if(!uploadLabel._authInterceptor){
-      uploadLabel.addEventListener('click', (e)=>{ if(!getCurrentUser()){ e.preventDefault(); openAuth('login'); } });
+      uploadLabel.addEventListener('click', (e)=>{ if(!getEffectiveUser()){ e.preventDefault(); openAuth('login'); } });
       uploadLabel._authInterceptor = true;
     }
   }
@@ -1142,7 +1153,7 @@ function updateAuthGates(){
     
     // Function to update contact form with user info
     function updateContactFormWithUser(){
-      const user = getCurrentUser() || (window._firebase && window._firebase.auth && window._firebase.auth.currentUser);
+    const user = getEffectiveUser();
       if(user && user.email){
         emailInput.value = user.email;
         emailInput.disabled = true;
@@ -1172,9 +1183,9 @@ function updateAuthGates(){
     Array.from(contactForm.elements).forEach(el=>{
       const tag = el.tagName;
       if(tag === 'BUTTON' && el.type === 'submit'){
-        if(!el._authSubmitInterceptor){
+          if(!el._authSubmitInterceptor){
           el.addEventListener('click', (e)=>{ 
-            if(!getCurrentUser()){ 
+            if(!getEffectiveUser()){ 
               e.preventDefault(); 
               openAuth('login'); 
             } 
@@ -1796,15 +1807,8 @@ shareFileInput.addEventListener('change', e=> {
 
 /* SHARE EXPERIENCE */
 document.getElementById('shareSend').addEventListener('click', async ()=> { 
-  // Check Firebase auth first, then fall back to sessionStorage user
-  let user = null;
-  if(window._firebase && window._firebase.auth && window._firebase.auth.currentUser){
-    const fbUser = window._firebase.auth.currentUser;
-    user = { uid: fbUser.uid, email: fbUser.email, name: fbUser.displayName || fbUser.email.split('@')[0] };
-  } else {
-    user = getCurrentUser();
-  }
-  
+  // Use unified effective user (Firebase or session) to decide login state
+  const user = getEffectiveUser();
   if(!user){
     alert('Please login to share your experience');
     openAuth('login');
@@ -1867,16 +1871,38 @@ document.getElementById('shareSend').addEventListener('click', async ()=> {
 
 // Helper: upload file to Cloudinary using server-signed signature
 async function uploadFileToCloudinarySigned(file){
-  // Request signature from our server
+  // First, check server config to see if unsigned upload preset is available
+  const cfgResp = await fetch('/api/cloudinary-config');
+  if(!cfgResp.ok) throw new Error('Cloudinary config request failed');
+  const cfg = await cfgResp.json();
+  const cloudName = cfg.cloud_name;
+  const uploadPreset = cfg.upload_preset;
+  const url = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
+
+  // If upload_preset is provided, perform an unsigned upload (no signature required)
+  if(uploadPreset){
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('upload_preset', uploadPreset);
+      fd.append('transformation', JSON.stringify([{ width: 1600, crop: 'limit' }]));
+
+      xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); fileNameEl.textContent = `Uploading: ${pct}%`; } };
+      xhr.onload = function(){ if(xhr.status >= 200 && xhr.status < 300){ try{ const resp = JSON.parse(xhr.responseText); resolve(resp); }catch(e){ resolve({ url: xhr.responseText }); } } else { reject(new Error('Unsigned upload failed: ' + xhr.statusText)); } };
+      xhr.onerror = function(){ reject(new Error('Upload network error')); };
+      xhr.send(fd);
+    });
+  }
+
+  // Otherwise request server-signed params and perform signed upload
   const sigResp = await fetch('/api/cloudinary-sign', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ filename: file.name }) });
   if(!sigResp.ok) throw new Error('Signature request failed');
   const sigData = await sigResp.json();
-  const cloudName = sigData.cloud_name;
   const apiKey = sigData.api_key;
   const timestamp = sigData.timestamp;
   const signature = sigData.signature;
-
-  const url = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -1886,25 +1912,10 @@ async function uploadFileToCloudinarySigned(file){
     fd.append('api_key', apiKey);
     fd.append('timestamp', timestamp);
     fd.append('signature', signature);
-    // Optional: transformations
     fd.append('transformation', JSON.stringify([{ width: 1600, crop: 'limit' }]));
 
-    xhr.upload.onprogress = function(e){
-      if(e.lengthComputable){
-        const pct = Math.round((e.loaded / e.total) * 100);
-        // show minimal feedback
-        fileNameEl.textContent = `Uploading: ${pct}%`;
-      }
-    };
-
-    xhr.onload = function(){
-      if(xhr.status >= 200 && xhr.status < 300){
-        try{ const resp = JSON.parse(xhr.responseText); resolve(resp); }catch(e){ reject(e); }
-      } else {
-        reject(new Error('Upload failed: ' + xhr.statusText));
-      }
-    };
-
+    xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); fileNameEl.textContent = `Uploading: ${pct}%`; } };
+    xhr.onload = function(){ if(xhr.status >= 200 && xhr.status < 300){ try{ const resp = JSON.parse(xhr.responseText); resolve(resp); }catch(e){ resolve({ url: xhr.responseText }); } } else { reject(new Error('Upload failed: ' + xhr.statusText)); } };
     xhr.onerror = function(){ reject(new Error('Upload network error')); };
     xhr.send(fd);
   });
@@ -1925,9 +1936,10 @@ document.getElementById('contactForm').addEventListener('submit', e=> {
     return;
   }
   
-  // Validate institutional email
-  if(!validateInstitutionalEmail(email)){
-    alert(`❌ Invalid email format.\n\nPlease use your institutional email: @${INSTITUTIONAL_EMAIL_DOMAIN}\n\nExample: yourname@${INSTITUTIONAL_EMAIL_DOMAIN}`);
+  // Basic email format validation (allow non-institutional emails for contact form)
+  function isValidEmailAddress(e){ try{ return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e).toLowerCase()); }catch(_) { return false; } }
+  if(!isValidEmailAddress(email)){
+    alert('❌ Please enter a valid email address');
     return;
   }
   
@@ -2004,7 +2016,7 @@ function renderChatMessages(){
   }
 
   chatMessages.forEach(msg => {
-    const user = getCurrentUser();
+    const user = getEffectiveUser();
     const isOwn = user && msg.email === user.email;
     const reported = msg.reported || false;
 
@@ -2060,11 +2072,11 @@ function renderChatMessages(){
   });
 
   // Attach report handlers
-  Array.from(w.querySelectorAll('.report-btn')).forEach(b=>{
+    Array.from(w.querySelectorAll('.report-btn')).forEach(b=>{
     b.addEventListener('click', (e)=>{
       e.preventDefault();
       const id = b.dataset.id;
-      if(!getCurrentUser()){ openAuth('login'); return; }
+      if(!getEffectiveUser()){ openAuth('login'); return; }
       reportChat(id);
     });
   });
@@ -2087,8 +2099,8 @@ const messageInput = document.getElementById('messageInput');
 const clearChatBtn = document.getElementById('clearChatBtn');
 
 sendBtn.addEventListener('click', ()=>{
-  // Call window.sendChatMessage so it uses Firebase override if available
-  if(window.sendChatMessage){
+  // Prefer Firestore-backed send when user is signed in with Firebase; otherwise use local send
+  if(window.sendChatMessage && window._firebase && window._firebase.auth && window._firebase.auth.currentUser){
     window.sendChatMessage();
   } else {
     sendChatMessage();
@@ -2135,8 +2147,8 @@ clearChatBtn.addEventListener('click', async ()=>{
 messageInput.addEventListener('keypress', (e)=>{
   if(e.key === 'Enter' && !e.shiftKey){
     e.preventDefault();
-    // Call window.sendChatMessage so it uses Firebase override if available
-    if(window.sendChatMessage){
+    // Prefer Firestore-backed send when user is signed in with Firebase; otherwise use local send
+    if(window.sendChatMessage && window._firebase && window._firebase.auth && window._firebase.auth.currentUser){
       window.sendChatMessage();
     } else {
       sendChatMessage();
@@ -2145,14 +2157,10 @@ messageInput.addEventListener('keypress', (e)=>{
 });
 
 function sendChatMessage(){
-  // Check Firebase auth first, then fall back to sessionStorage user
-  let user = null;
-  if(window._firebase && window._firebase.auth && window._firebase.auth.currentUser){
-    const fbUser = window._firebase.auth.currentUser;
-    user = { uid: fbUser.uid, email: fbUser.email, name: fbUser.displayName || fbUser.email.split('@')[0] };
-  } else {
-    user = getCurrentUser();
-  }
+  // Check effective user (Firebase or sessionStorage)
+  const eff = getEffectiveUser();
+  console.log('[DEBUG] sendChatMessage - effective user:', eff);
+  let user = eff;
   
   if(!user){ 
     alert('Please login to send messages');
@@ -2189,6 +2197,10 @@ function sendChatMessage(){
   
   saveChatMessage(msg);
   messageInput.value = '';
+  // Attempt to persist to server messages API so other instances can read it (best-effort)
+  try{
+    fetch('/api/messages', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(msg) }).then(r=>{ /* ignore result */ }).catch(e=>{ console.debug('Server message persist failed', e); });
+  }catch(e){ /* ignore */ }
   
   // Simulate receiving a response (optional - can be removed)
   setTimeout(() => {
@@ -2230,7 +2242,7 @@ function sendChatMessage(){
     b.addEventListener('click', (ev)=>{
       ev.preventDefault();
       // require login to insert
-      if(!getCurrentUser()){ openAuth('login'); return; }
+      if(!getEffectiveUser()){ openAuth('login'); return; }
       insertAtCursor(input, e);
       emojiPicker.classList.add('hidden');
       input.focus();
@@ -2240,7 +2252,7 @@ function sendChatMessage(){
 
   emojiBtn.addEventListener('click', (e)=>{
     e.stopPropagation();
-    if(!getCurrentUser()){ openAuth('login'); return; }
+    if(!getEffectiveUser()){ openAuth('login'); return; }
     emojiPicker.classList.toggle('hidden');
   });
 
@@ -2331,7 +2343,7 @@ function renderAdminContent(){
     let reports = loadReportedChats(); reports = reports.filter(r=>r.email !== email); localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(reports));
     renderAdminContent(); renderChatMessages();
     // if banned user is currently logged in, log them out
-    const cur = getCurrentUser(); if(cur && cur.email === email){ logout(); alert('Banned user was logged out.'); }
+    const cur = getEffectiveUser(); if(cur && cur.email === email){ logout(); alert('Banned user was logged out.'); }
   }));
   Array.from(container.querySelectorAll('.admin-dismiss')).forEach(b=> b.addEventListener('click', ()=>{
     const reportId = b.dataset.report; let reports = loadReportedChats(); reports = reports.filter(r=>r.id!==reportId); localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(reports)); renderAdminContent();
@@ -2339,7 +2351,7 @@ function renderAdminContent(){
 }
 
 function updateAdminUI(){
-  const cur = getCurrentUser();
+  const cur = getEffectiveUser();
   const openAdminBtn = document.getElementById('openAdminBtn');
   const adminOverlay = document.getElementById('adminOverlay');
   if(openAdminBtn){
@@ -2669,17 +2681,32 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
 
   // on auth state change
   onAuthStateChanged(auth, async (user) => {
+    console.log('[DEBUG] onAuthStateChanged - user:', user);
     if(user){
       // check banned
       const bannedSnap = await getDoc(doc(db,'banned', user.uid));
       if(bannedSnap.exists()){
         alert('Your account is banned.'); await signOut(auth); return; }
-      // require email verification
-      if(user && !user.emailVerified){
-        alert('Please verify your email address before using the site. A verification link was sent to your email.');
-        await signOut(auth);
-        return;
-      }
+        // require email verification OR allow OTP-verified users (OTP flow sets otpVerified in Firestore)
+        if(user && !user.emailVerified){
+          try{
+            const ud = await getDoc(doc(db, 'users', user.uid));
+            const ok = ud && ud.exists() && ud.data() && ud.data().otpVerified;
+            if(!ok){
+              alert('Please verify your email address before using the site. A verification link was sent to your email.');
+              await signOut(auth);
+              return;
+            } else {
+              // user has been OTP-verified; allow login without email verification
+              console.log('User OTP-verified; allowing sign-in without emailVerified flag.', ud.data());
+            }
+          }catch(e){
+            console.error('Failed to check OTP verification status:', e);
+            alert('Please verify your email address before using the site.');
+            await signOut(auth);
+            return;
+          }
+        }
       // check if admin - redirect to admin dashboard if true
       const isAdmin = await checkIsAdmin(user.uid);
       if(isAdmin){
@@ -2762,8 +2789,9 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
                   console.log('User created:', cred.user.uid);
                   await updateProfile(cred.user, { displayName: pending.name });
                   console.log('Profile updated');
-                  await setDoc(doc(db,'users', cred.user.uid), { name: pending.name, email: pending.email, createdAt: serverTimestamp() });
-                  console.log('Firestore user doc created');
+                  // Mark the Firestore users doc as OTP-verified so onAuthStateChanged allows login
+                  await setDoc(doc(db,'users', cred.user.uid), { name: pending.name, email: pending.email, otpVerified: true, createdAt: serverTimestamp() });
+                  console.log('Firestore user doc created (otpVerified:true)');
                   closeAuth();
                   pending = null;
                   document.getElementById('otpInput').value = '';
@@ -2773,8 +2801,10 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
                   if(createErr.code === 'auth/email-already-in-use'){
                     console.log('Account already exists, attempting to sign in...');
                     try{
-                      await signInWithEmailAndPassword(auth, pending.email, pending.password);
+                      const signed = await signInWithEmailAndPassword(auth, pending.email, pending.password);
                       console.log('Signed in successfully');
+                      // Ensure users doc marks otpVerified so the auth listener won't sign the user out
+                      try{ await setDoc(doc(db,'users', signed.user.uid), { name: pending.name || signed.user.displayName || '', email: pending.email, otpVerified: true }, { merge: true }); }catch(e){ console.warn('Failed to set otpVerified on existing user', e); }
                       closeAuth();
                       pending = null;
                       document.getElementById('otpInput').value = '';

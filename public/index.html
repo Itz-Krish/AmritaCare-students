@@ -1796,7 +1796,15 @@ shareFileInput.addEventListener('change', e=> {
 
 /* SHARE EXPERIENCE */
 document.getElementById('shareSend').addEventListener('click', async ()=> { 
-  const user = getCurrentUser();
+  // Check Firebase auth first, then fall back to sessionStorage user
+  let user = null;
+  if(window._firebase && window._firebase.auth && window._firebase.auth.currentUser){
+    const fbUser = window._firebase.auth.currentUser;
+    user = { uid: fbUser.uid, email: fbUser.email, name: fbUser.displayName || fbUser.email.split('@')[0] };
+  } else {
+    user = getCurrentUser();
+  }
+  
   if(!user){
     alert('Please login to share your experience');
     openAuth('login');

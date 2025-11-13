@@ -1156,13 +1156,14 @@ function updateAuthGates(){
     const user = getEffectiveUser();
       if(user && user.email){
         emailInput.value = user.email;
-        emailInput.disabled = true;
-        emailInput.style.opacity = '0.7';
+        // Use readOnly instead of disabled so FormData includes the email when submitting
+        emailInput.readOnly = true;
+        emailInput.style.opacity = '0.85';
         emailInput.style.cursor = 'not-allowed';
         emailInput.title = 'Email locked from your logged-in account';
       } else {
         emailInput.value = '';
-        emailInput.disabled = false;
+        emailInput.readOnly = false;
         emailInput.style.opacity = '';
         emailInput.style.cursor = '';
         emailInput.title = '';
@@ -2014,54 +2015,61 @@ async function uploadFileToCloudinarySigned(file){
 /* CONTACT FORM */
 document.getElementById('contactForm').addEventListener('submit', e=> { 
   e.preventDefault();
-  
-  const formData = new FormData(e.target);
-  const name = formData.get('name').trim();
-  const email = formData.get('email').trim().toLowerCase();
-  const message = formData.get('message').trim();
-  
+
+  // Require user to be logged in before allowing contact submission
+  const user = getEffectiveUser();
+  if(!user){
+    // open auth modal to prompt login/signup
+    openAuth('login');
+    return;
+  }
+
+  const formEl = e.target;
+  // Ensure email input is present and not disabled so FormData includes it
+  const formData = new FormData(formEl);
+  const name = (formData.get('name') || '').trim();
+  const email = (formData.get('email') || '').trim().toLowerCase();
+  const message = (formData.get('message') || '').trim();
+
   // Validate required fields
   if(!name || !email || !message){
     alert('❌ Please fill in all fields');
     return;
   }
-  
-  // Basic email format validation (allow non-institutional emails for contact form)
+
+  // Basic email format validation
   function isValidEmailAddress(e){ try{ return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e).toLowerCase()); }catch(_) { return false; } }
   if(!isValidEmailAddress(email)){
     alert('❌ Please enter a valid email address');
     return;
   }
-  
-  // Store contact submissions
+
+  // Store contact submissions locally as backup
   const contacts = JSON.parse(localStorage.getItem('mh_contact_submissions') || '[]');
-  contacts.push({
-    name,
-    email,
-    message,
-    timestamp: Date.now(),
-    date: new Date().toISOString()
-  });
+  contacts.push({ name, email, message, timestamp: Date.now(), date: new Date().toISOString() });
   localStorage.setItem('mh_contact_submissions', JSON.stringify(contacts));
-  
+
   // Send to FormSubmit via AJAX (FormSubmit supports CORS)
   const statusEl = document.getElementById('contactStatus');
   statusEl.textContent = 'Sending...';
-  fetch('https://formsubmit.co/ajax/singhkrish.np@gmail.com', {
-    method: 'POST',
-    body: formData,
-    headers: { 'Accept': 'application/json' }
-  }).then(r=>r.json()).then(j=>{
-    if(j.success){
-      statusEl.textContent = '✅ Message sent — we will get back to you soon.';
-      e.target.reset();
-    } else {
-      statusEl.textContent = '⚠️ Failed to send email; saved locally.';
-    }
-  }).catch(err=>{
-    console.error('FormSubmit error', err);
-    statusEl.textContent = '⚠️ Network error — message saved locally.';
-  });
+
+  // Use the configured FormSubmit recipient from the hidden action or env (hardcoded here)
+  const endpoint = 'https://formsubmit.co/ajax/singhkrish.np@gmail.com';
+  fetch(endpoint, { method: 'POST', body: formData, headers: { 'Accept': 'application/json' } })
+    .then(r=>r.json())
+    .then(j=>{
+      if(j.success){
+        statusEl.textContent = '✅ Message sent — we will get back to you soon.';
+        formEl.reset();
+        // Refresh contact form prefill after reset
+        setTimeout(()=> window.dispatchEvent(new Event('loginSuccess')), 200);
+      } else {
+        statusEl.textContent = '⚠️ Failed to send email; saved locally.';
+      }
+    }).catch(err=>{
+      console.error('FormSubmit error', err);
+      statusEl.textContent = '⚠️ Network error — message saved locally.';
+    });
 });
 
 /* CHAT: Real-time chat functionality */

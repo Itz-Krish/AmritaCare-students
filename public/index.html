@@ -2087,7 +2087,12 @@ const messageInput = document.getElementById('messageInput');
 const clearChatBtn = document.getElementById('clearChatBtn');
 
 sendBtn.addEventListener('click', ()=>{
-  sendChatMessage();
+  // Call window.sendChatMessage so it uses Firebase override if available
+  if(window.sendChatMessage){
+    window.sendChatMessage();
+  } else {
+    sendChatMessage();
+  }
 });
 
 clearChatBtn.addEventListener('click', async ()=>{
@@ -2130,7 +2135,12 @@ clearChatBtn.addEventListener('click', async ()=>{
 messageInput.addEventListener('keypress', (e)=>{
   if(e.key === 'Enter' && !e.shiftKey){
     e.preventDefault();
-    sendChatMessage();
+    // Call window.sendChatMessage so it uses Firebase override if available
+    if(window.sendChatMessage){
+      window.sendChatMessage();
+    } else {
+      sendChatMessage();
+    }
   }
 });
 

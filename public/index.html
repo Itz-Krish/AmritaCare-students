@@ -2644,6 +2644,7 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
   try {
     const response = await fetch('/api/firebase-config');
     firebaseConfig = await response.json();
+    console.log('[DEBUG] /api/firebase-config response:', firebaseConfig);
   } catch (err) {
     console.error('Failed to fetch Firebase config:', err);
     firebaseConfig = null;
@@ -2660,12 +2661,14 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
     window._useFirebaseAuth = false;
   } else {
     const app = initializeApp(firebaseConfig);
+    console.log('[DEBUG] Initializing Firebase with config (masked):', { apiKey: firebaseConfig.apiKey ? '***' : '', authDomain: firebaseConfig.authDomain });
     // indicate Firebase handlers are active so legacy local handlers skip
     window._useFirebaseAuth = true;
     const auth = getAuth(app);
     const db = getFirestore(app);
     // expose firebase objects for legacy handlers
     window._firebase = { app, auth, db };
+    console.log('[DEBUG] window._firebase set', !!window._firebase && !!window._firebase.auth && !!window._firebase.db);
 
   // listeners / state
   let unsubscribeChats = null;
@@ -2677,6 +2680,7 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
   // Override sendChatMessage to write to Firestore
   window.sendChatMessage = async function(){
     const user = auth.currentUser;
+    console.log('[DEBUG] window.sendChatMessage called, auth.currentUser:', user && user.email);
     if(!user){ openAuth('login'); return; }
     // check banned
     const bannedDoc = await getDoc(doc(db,'banned', user.uid));
@@ -2702,6 +2706,7 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
   // start listening to latest 30 chats
   function startChatListener(){
     if(unsubscribeChats) return;
+    console.log('[DEBUG] startChatListener - setting up listener on chats collection');
     const q = query(collection(db,'chats'), orderBy('timestamp','desc'), limit(30));
     unsubscribeChats = onSnapshot(q, snap => {
         console.log('[DEBUG] Firestore chat snapshot received, docs:', snap.size);

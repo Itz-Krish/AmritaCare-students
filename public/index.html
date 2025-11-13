@@ -1081,7 +1081,7 @@ function logout(showAlert){
 
 /* --- UI gating: enable/disable sections based on login state --- */
 function updateAuthGates(){
-  const user = getCurrentUser();
+  const user = getEffectiveUser();
   const logged = !!user;
   console.log('[DEBUG] updateAuthGates - session user:', user, 'firebaseUser:', (window._firebase && window._firebase.auth && window._firebase.auth.currentUser) || null);
 
@@ -1419,7 +1419,7 @@ closeProfile.addEventListener('click', ()=> profileOverlay.classList.add('hidden
 logoutBtn.addEventListener('click', async ()=> { try{ if(window._firebase && window._firebase.auth){ await window._firebase.auth.signOut(); } }catch(e){} logout(true); profileOverlay.classList.add('hidden'); });
 
 updateNameBtn.addEventListener('click', ()=>{
-  const u = getCurrentUser(); 
+  const u = getEffectiveUser(); 
   if(!u) return alert('❌ No user logged in');
   
   const newName = profileName.value.trim(); 
@@ -1454,7 +1454,7 @@ updateNameBtn.addEventListener('click', ()=>{
 });
 
 changePasswordBtn.addEventListener('click', ()=>{
-  const u = getCurrentUser(); 
+  const u = getEffectiveUser(); 
   if(!u) return alert('❌ No user logged in');
   
   const currentPwd = prompt('Enter your current password:');
@@ -1499,7 +1499,7 @@ changePasswordBtn.addEventListener('click', ()=>{
 
 /* restore session on load */
 window.addEventListener('load', ()=>{ 
-  const cur = getCurrentUser(); 
+  const cur = getEffectiveUser(); 
   if(cur){ 
     document.getElementById('loginBtn').classList.add('hidden'); 
     profileBtn.classList.remove('hidden'); 

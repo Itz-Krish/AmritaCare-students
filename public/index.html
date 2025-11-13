@@ -2127,7 +2127,15 @@ messageInput.addEventListener('keypress', (e)=>{
 });
 
 function sendChatMessage(){
-  const user = getCurrentUser();
+  // Check Firebase auth first, then fall back to sessionStorage user
+  let user = null;
+  if(window._firebase && window._firebase.auth && window._firebase.auth.currentUser){
+    const fbUser = window._firebase.auth.currentUser;
+    user = { uid: fbUser.uid, email: fbUser.email, name: fbUser.displayName || fbUser.email.split('@')[0] };
+  } else {
+    user = getCurrentUser();
+  }
+  
   if(!user){ 
     alert('Please login to send messages');
     openAuth('login'); 
@@ -2143,6 +2151,15 @@ function sendChatMessage(){
   
   const txt = messageInput.value.trim();
   if(!txt) return;
+  
+  // If Firebase is enabled, send via Firestore; otherwise use localStorage
+  if(window._firebase && window._firebase.auth && window._firebase.auth.currentUser && window._firebase.db){
+    // Use Firestore-backed sendChatMessage (will be overridden in Firebase module)
+    if(window.sendChatMessage && window.sendChatMessage !== sendChatMessage){
+      window.sendChatMessage(); // Call the Firebase version
+      return;
+    }
+  }
   
   const msg = {
     from: user.name || user.email.split('@')[0],

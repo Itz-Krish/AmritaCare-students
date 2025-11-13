@@ -2760,15 +2760,21 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
     console.log('[DEBUG] startChatListener - setting up listener on chats collection');
     const q = query(collection(db,'chats'), orderBy('timestamp','desc'), limit(30));
     unsubscribeChats = onSnapshot(q, snap => {
-        console.log('[DEBUG] Firestore chat snapshot received, docs:', snap.size);
-        const msgs = [];
-        snap.forEach(d => { const data = d.data(); msgs.push({ id: d.id, from: data.from, email: data.email, text: data.text, ts: formatTs(data.timestamp), timestamp: data.timestamp, uid: data.uid, reported: data.reported||false }); });
-        // reverse to show oldest first
-        msgs.reverse();
-        window.chatMessages = msgs;
-        // clear any status message
+      console.log('[DEBUG] Firestore chat snapshot received, docs:', snap.size);
+      const msgs = [];
+      snap.forEach(d => { const data = d.data(); msgs.push({ id: d.id, from: data.from, email: data.email, text: data.text, ts: formatTs(data.timestamp), timestamp: data.timestamp, uid: data.uid, reported: data.reported||false }); });
+      // reverse to show oldest first
+      msgs.reverse();
+      // If snapshot returned empty but we already have local messages, don't overwrite with empty (prevents UI flash)
+      if(Array.isArray(msgs) && msgs.length === 0 && Array.isArray(window.chatMessages) && window.chatMessages.length > 0){
+        console.log('[DEBUG] Firestore snapshot empty — preserving existing chatMessages from local state');
         try{ const s = document.getElementById('chatStatus'); if(s) s.textContent = ''; }catch(e){}
-        renderChatMessages();
+        return;
+      }
+      window.chatMessages = msgs;
+      // clear any status message
+      try{ const s = document.getElementById('chatStatus'); if(s) s.textContent = ''; }catch(e){}
+      renderChatMessages();
     }, err=> {
       console.error('chat listener',err);
       try{

@@ -1429,6 +1429,45 @@ updateNameBtn.addEventListener('click', ()=>{
   }
   
   // Generate OTP for name change
+  // If Firebase is enabled, use server OTP flow + update Firebase profile
+  if(window._useFirebaseAuth && window._firebase && window._firebase.auth){
+    (async ()=>{
+      try{
+        // Request OTP via server
+        const resp = await fetch('/api/send-otp', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ email: u.email, name: u.name || '' }) });
+        const j = await resp.json();
+        if(!resp.ok){ console.error('send-otp failed', j); return alert('Failed to send OTP: '+(j.error||j.detail||'server error')); }
+        const otp = prompt(`📨 Enter the 6-digit OTP sent to ${u.email}`);
+        if(!otp) return;
+        const verify = await fetch('/api/verify-otp', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ token: j.token, otp }) });
+        const vj = await verify.json();
+        if(!verify.ok){ console.error('verify-otp failed', vj); return alert('OTP verification failed: '+(vj.error||'invalid')); }
+
+        // Update Firebase profile (dynamic import to access modular helpers)
+        const auth = window._firebase.auth;
+        const user = auth.currentUser;
+        if(!user) return alert('No Firebase user currently signed in');
+        const m = await import('https://www.gstatic.com/firebasejs/12.5.0/firebase-auth.js');
+        await m.updateProfile(user, { displayName: newName });
+
+        // Also update Firestore users doc if available
+        if(window._firebase.db){
+          try{
+            const fmod = await import('https://www.gstatic.com/firebasejs/12.5.0/firebase-firestore.js');
+            const docRef = fmod.doc(window._firebase.db, 'users', user.uid);
+            await fmod.setDoc(docRef, { name: newName }, { merge: true });
+          }catch(e){ console.warn('Failed to update users doc', e); }
+        }
+
+        // Update UI/session
+        setCurrentUser({ uid: user.uid, email: user.email, name: newName });
+        alert('✅ Name updated successfully!');
+      }catch(err){ console.error('updateName (firebase) failed', err); alert('Failed to update name: '+err.message); }
+    })();
+    return;
+  }
+
+  // Fallback: local/demo OTP flow
   const otp = generateOTP();
   storeOTP(u.email, otp);
   const code = prompt(`📨 OTP sent to ${u.email}\n\nSimulated OTP: ${otp}\n\nEnter OTP to confirm name change:`);
@@ -1461,6 +1500,57 @@ changePasswordBtn.addEventListener('click', ()=>{
   if(!currentPwd) return;
   
   // Verify current password
+  // If Firebase is enabled, use server OTP + Firebase updatePassword flow
+  if(window._useFirebaseAuth && window._firebase && window._firebase.auth){
+    (async ()=>{
+      try{
+        // Request OTP via server
+        const resp = await fetch('/api/send-otp', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ email: u.email, name: u.name || '' }) });
+        const j = await resp.json();
+        if(!resp.ok){ console.error('send-otp failed', j); return alert('Failed to send OTP: '+(j.error||j.detail||'server error')); }
+        const otp = prompt(`📨 Enter the 6-digit OTP sent to ${u.email}`);
+        if(!otp) return;
+        const verify = await fetch('/api/verify-otp', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ token: j.token, otp }) });
+        const vj = await verify.json();
+        if(!verify.ok){ console.error('verify-otp failed', vj); return alert('OTP verification failed: '+(vj.error||'invalid')); }
+
+        // Ask for new password
+        const np = prompt('Enter new password (min 6 characters):');
+        if(!np || np.length < 6) return alert('Password must be at least 6 characters long');
+
+        const auth = window._firebase.auth;
+        const user = auth.currentUser;
+        if(!user) return alert('No Firebase user currently signed in');
+
+        // Try to update password directly
+        try{
+          const m = await import('https://www.gstatic.com/firebasejs/12.5.0/firebase-auth.js');
+          await m.updatePassword(user, np);
+          alert('✅ Password changed successfully!');
+        }catch(upErr){
+          console.warn('updatePassword failed, attempting reauth if necessary', upErr);
+          // If requires recent login, ask current password to reauthenticate
+          try{
+            const m = await import('https://www.gstatic.com/firebasejs/12.5.0/firebase-auth.js');
+            if(upErr.code === 'auth/requires-recent-login' || upErr.code === 'auth/requires-recent-login'){
+              const cur = prompt('For security, re-enter your current password to confirm:');
+              if(!cur) return alert('Reauthentication cancelled');
+              const cred = m.EmailAuthProvider.credential(user.email, cur);
+              await m.reauthenticateWithCredential(user, cred);
+              await m.updatePassword(user, np);
+              alert('✅ Password changed successfully after reauthentication');
+            } else {
+              console.error('Password update error', upErr);
+              alert('Failed to update password: '+(upErr.message||upErr));
+            }
+          }catch(reauthErr){ console.error('Reauth/update failed', reauthErr); alert('Failed to update password: '+(reauthErr.message||reauthErr)); }
+        }
+      }catch(err){ console.error('changePassword (firebase) failed', err); alert('Failed to change password: '+err.message); }
+    })();
+    return;
+  }
+
+  // Local/demo flow
   const accs = loadAccounts();
   const user = accs.find(a=>a.email===u.email && a.password===currentPwd);
   if(!user){

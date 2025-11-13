@@ -1828,7 +1828,7 @@ document.getElementById('shareSend').addEventListener('click', async ()=> {
 
   // Store shared experiences (optional)
   const shares = JSON.parse(localStorage.getItem('mh_shared_experiences') || '[]');
-  shares.push({
+  const shareObj = {
     user: user.name || user.email,
     email: user.email,
     message: t,
@@ -1836,8 +1836,19 @@ document.getElementById('shareSend').addEventListener('click', async ()=> {
     fileUrl: uploadedUrl,
     timestamp: Date.now(),
     date: new Date().toISOString()
-  });
+  };
+  shares.push(shareObj);
   localStorage.setItem('mh_shared_experiences', JSON.stringify(shares));
+
+  // If Firebase is enabled, persist share to Firestore and optionally post into chats for realtime visibility
+  try{
+    if(window._useFirebaseAuth && window._firebase && window._firebase.db){
+      const db = window._firebase.db;
+      try{ await addDoc(collection(db,'shares'), { ...shareObj, createdAt: serverTimestamp() }); }catch(e){ console.warn('Failed to write share to Firestore', e); }
+      // Also post as a chat message so it appears in realtime chat
+      try{ await addDoc(collection(db,'chats'), { uid: window._firebase.auth.currentUser.uid, from: user.name || user.email.split('@')[0], email: user.email, text: `${t}${uploadedUrl ? '\n' + uploadedUrl : ''}`, timestamp: serverTimestamp() }); }catch(e){ console.warn('Failed to post share into chats', e); }
+    }
+  }catch(e){ console.warn('share persistence error', e); }
 
   alert(`✅ Experience shared successfully!${fileInfo}`);
   document.getElementById('shareMessage').value=''; 
@@ -2472,7 +2483,7 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
 <script type="module">
   // Firebase integration: Auth + Firestore for chat, reports, admin
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-app.js";
-  import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, EmailAuthProvider, reauthenticateWithCredential, updatePassword } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-auth.js";
+  import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, sendEmailVerification, EmailAuthProvider, reauthenticateWithCredential, updatePassword } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-auth.js";
   import { getFirestore, collection, addDoc, doc, setDoc, getDoc, onSnapshot, query, orderBy, serverTimestamp, deleteDoc, limit, where } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-firestore.js";
 
   // Fetch Firebase config from server (kept out of public code for security)
@@ -2628,6 +2639,12 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
       const bannedSnap = await getDoc(doc(db,'banned', user.uid));
       if(bannedSnap.exists()){
         alert('Your account is banned.'); await signOut(auth); return; }
+      // require email verification
+      if(user && !user.emailVerified){
+        alert('Please verify your email address before using the site. A verification link was sent to your email.');
+        await signOut(auth);
+        return;
+      }
       // check if admin - redirect to admin dashboard if true
       const isAdmin = await checkIsAdmin(user.uid);
       if(isAdmin){
@@ -2674,7 +2691,9 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
         const cred = await createUserWithEmailAndPassword(auth, email, pwd);
         await updateProfile(cred.user, { displayName: name });
         await setDoc(doc(db,'users', cred.user.uid), { name, email, createdAt: serverTimestamp() });
-        closeAuth(); alert('Account created and logged in');
+        // Send verification email
+        try{ await sendEmailVerification(cred.user); }catch(e){ console.warn('sendEmailVerification failed', e); }
+        closeAuth(); alert('Account created. A verification email was sent — please check your inbox and verify before logging in.');
       }catch(err){ console.error(err); alert('Signup failed: '+err.message); }
     }); }
   }catch(e){ console.error('setup auth handlers', e); }

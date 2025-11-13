@@ -2795,30 +2795,35 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
   onAuthStateChanged(auth, async (user) => {
     console.log('[DEBUG] onAuthStateChanged - user:', user);
     if(user){
-      // check banned
-      const bannedSnap = await getDoc(doc(db,'banned', user.uid));
-      if(bannedSnap.exists()){
-        alert('Your account is banned.'); await signOut(auth); return; }
-        // require email verification OR allow OTP-verified users (OTP flow sets otpVerified in Firestore)
-        if(user && !user.emailVerified){
-          try{
-            const ud = await getDoc(doc(db, 'users', user.uid));
-            const ok = ud && ud.exists() && ud.data() && ud.data().otpVerified;
-            if(!ok){
-              alert('Please verify your email address before using the site. A verification link was sent to your email.');
-              await signOut(auth);
-              return;
-            } else {
-              // user has been OTP-verified; allow login without email verification
-              console.log('User OTP-verified; allowing sign-in without emailVerified flag.', ud.data());
-            }
-          }catch(e){
-            console.error('Failed to check OTP verification status:', e);
-            alert('Please verify your email address before using the site.');
+      // check banned (wrap in try/catch so a read error doesn't forcibly sign the user out)
+      try{
+        const bannedSnap = await getDoc(doc(db,'banned', user.uid));
+        if(bannedSnap && bannedSnap.exists()){
+          alert('Your account is banned.'); await signOut(auth); return; }
+      }catch(bErr){
+        console.warn('Could not read banned status (continuing):', bErr);
+      }
+
+      // require email verification OR allow OTP-verified users (OTP flow sets otpVerified in Firestore)
+      if(user && !user.emailVerified){
+        try{
+          const ud = await getDoc(doc(db, 'users', user.uid));
+          const ok = ud && ud.exists() && ud.data() && ud.data().otpVerified;
+          if(!ok){
+            // If the users doc says not otpVerified, force sign out
+            alert('Please verify your email address before using the site. A verification link was sent to your email.');
             await signOut(auth);
             return;
+          } else {
+            // user has been OTP-verified; allow login without email verification
+            console.log('User OTP-verified; allowing sign-in without emailVerified flag.', ud.data());
           }
+        }catch(e){
+          // Don't sign the user out if reading the users doc fails (e.g., security rules); log and proceed
+          console.warn('Failed to check OTP verification status — proceeding without blocking sign-in:', e);
+          // Optionally notify in-console only; avoid alert to reduce UX friction
         }
+      }
       // check if admin - redirect to admin dashboard if true
       const isAdmin = await checkIsAdmin(user.uid);
       if(isAdmin){

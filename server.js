@@ -56,6 +56,18 @@ try{
   }
 }catch(e){ console.warn('Firebase Admin initialization error', e); }
 
+// Debug endpoint to check Admin initialization status (does not expose secrets)
+app.get('/api/debug-admin', (req, res) => {
+  try{
+    const saPresent = !!(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 || process.env.FIREBASE_SERVICE_ACCOUNT);
+    const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || null;
+    return res.json({ success: true, adminInitialized: !!_adminDb, serviceAccountPresent: saPresent, projectId: projectId || 'not-set' });
+  }catch(err){
+    console.error('debug-admin error', err);
+    return res.status(500).json({ success: false, error: 'debug_failed' });
+  }
+});
+
 app.post('/api/messages', async (req, res) => {
   try{
     const { from, email, text, timestamp } = req.body || {};

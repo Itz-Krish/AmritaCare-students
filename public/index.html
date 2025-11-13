@@ -2656,13 +2656,15 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
       try{
         const input = document.getElementById('messageInput'); if(!input) return;
         const txt = (input.value||'').trim(); if(!txt) return;
-        const from = (window && window._currentUser && window._currentUser.name) ? window._currentUser.name : (window && window._currentUser && window._currentUser.email) ? window._currentUser.email.split('@')[0] : 'Anonymous';
-        const email = (window && window._currentUser && window._currentUser.email) ? window._currentUser.email : 'anonymous@local';
+        // use effective user helper so we support Firebase or session users
+        const eff = (typeof getEffectiveUser === 'function') ? getEffectiveUser() : null;
+        const from = eff && eff.name ? eff.name : eff && eff.email ? (eff.email.split('@')[0]) : 'Anonymous';
+        const email = eff && eff.email ? eff.email : 'anonymous@local';
         const msg = { from, email, text: txt, ts: new Date().toLocaleTimeString(), timestamp: Date.now() };
-        // optimistic UI
-        createFallbackMessageDOM(msg);
+        // persist locally (updates localStorage and renders)
+        try{ saveChatMessage(msg); }catch(e){ console.warn('saveChatMessage failed', e); createFallbackMessageDOM(msg); }
         input.value = '';
-        // try to persist to server
+        // try to persist to server (best-effort)
         try{ await fetch('/api/messages', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(msg) }); }
         catch(e){ console.debug('Fallback persist failed', e); }
       }catch(e){ console.error('fallbackSend error', e); }
@@ -2672,10 +2674,10 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
     function attach(){
       const btn = document.getElementById('sendBtn');
       const input = document.getElementById('messageInput');
-      if(btn){ btn.addEventListener('click', (e)=>{ try{ // prefer existing handler if present
-          if(typeof window.sendChatMessage === 'function' && window.sendChatMessage !== fallbackSend){ try{ window.sendChatMessage(); return; }catch(er){ console.warn('window.sendChatMessage failed, falling back', er); } }
+        if(btn){ btn.addEventListener('click', (e)=>{ try{ // prefer Firebase send only when signed-in
+          if(typeof window.sendChatMessage === 'function' && window.sendChatMessage !== fallbackSend && window._firebase && window._firebase.auth && window._firebase.auth.currentUser){ try{ window.sendChatMessage(); return; }catch(er){ console.warn('window.sendChatMessage failed, falling back', er); } }
           fallbackSend(); }catch(ex){ console.error('sendBtn handler crash', ex); } }); }
-      if(input){ input.addEventListener('keypress', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); if(typeof window.sendChatMessage === 'function' && window.sendChatMessage !== fallbackSend){ try{ window.sendChatMessage(); return; }catch(er){} } fallbackSend(); } }); }
+        if(input){ input.addEventListener('keypress', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); if(typeof window.sendChatMessage === 'function' && window.sendChatMessage !== fallbackSend && window._firebase && window._firebase.auth && window._firebase.auth.currentUser){ try{ window.sendChatMessage(); return; }catch(er){} } fallbackSend(); } }); }
     }
 
     if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', attach); else attach();

@@ -140,8 +140,9 @@ app.post('/api/send-otp', async (req, res) => {
     const token = `${base64url(payload)}.${signature}`;
 
     // Send via SendGrid
-    const sendgridKey = process.env.SENDGRID_API_KEY;
-    const fromEmail = process.env.SENDGRID_FROM || process.env.VITE_FORMSUBMIT_EMAIL;
+    // Trim env values to avoid accidental trailing newlines/spaces (common when copying values)
+    const sendgridKey = (process.env.SENDGRID_API_KEY || '').trim();
+    const fromEmail = (process.env.SENDGRID_FROM || process.env.VITE_FORMSUBMIT_EMAIL || '').trim();
     if(!sendgridKey || !fromEmail) return res.status(500).json({ error: 'email_not_configured' });
 
     const msg = {
@@ -157,7 +158,17 @@ app.post('/api/send-otp', async (req, res) => {
       body: JSON.stringify(msg)
     });
 
-    if(!sgRes.ok){ const text = await sgRes.text(); console.error('SendGrid error', text); return res.status(500).json({ error: 'email_send_failed', detail: text }); }
+    if(!sgRes.ok){
+      const text = await sgRes.text();
+      console.error('SendGrid error', text);
+      // If SendGrid rejects because of invalid from, surface that clearly for debugging
+      try{
+        const parsed = JSON.parse(text);
+        return res.status(500).json({ error: 'email_send_failed', detail: parsed });
+      }catch(e){
+        return res.status(500).json({ error: 'email_send_failed', detail: text });
+      }
+    }
 
     return res.json({ success: true, token });
   }catch(err){ console.error('send-otp', err);

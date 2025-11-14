@@ -2096,6 +2096,10 @@ async function uploadFileToCloudinarySigned(file){
           const serverResp = await fetch('/api/upload-cloudinary', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ filename: file.name, data: base64 }) });
           if(!serverResp.ok) throw new Error('Server upload returned ' + serverResp.status);
           const serverJson = await serverResp.json();
+          console.log('Server upload response:', serverJson);
+          // Check for URL in various possible fields
+          const uploadedUrl = serverJson.secure_url || serverJson.url || serverJson.secureUrl || serverJson.publicUrl || null;
+          if(!uploadedUrl) throw new Error('No URL in Cloudinary response: ' + JSON.stringify(serverJson));
           if(fileNameEl) fileNameEl.textContent = 'No file chosen';
           return serverJson;
         }catch(fallbackErr){

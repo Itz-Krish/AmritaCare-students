@@ -233,7 +233,9 @@ app.post('/api/upload-cloudinary', async (req, res) => {
       httpsRes.setEncoding('utf8');
       httpsRes.on('data', chunk => data += chunk);
       httpsRes.on('end', () => {
-        try{ const json = JSON.parse(data); return res.json(json); } catch(e){ return res.status(500).json({ error: 'invalid_response', body: data }); }
+        console.log('Cloudinary response status:', httpsRes.statusCode);
+        console.log('Cloudinary response body:', data);
+        try{ const json = JSON.parse(data); console.log('Cloudinary response JSON:', JSON.stringify(json)); return res.json(json); } catch(e){ console.error('Failed to parse Cloudinary response'); return res.status(500).json({ error: 'invalid_response', body: data }); }
       });
     });
     httpsReq.on('error', (e) => { console.error('Server upload error', e); return res.status(500).json({ error: 'upload_failed' }); });

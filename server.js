@@ -185,7 +185,8 @@ app.post('/api/cloudinary-sign', (req, res) => {
     return res.status(500).json({ error: 'Cloudinary not configured on server' });
   }
   const timestamp = Math.floor(Date.now() / 1000);
-  const toSign = `timestamp=${timestamp}`;
+  // Signature MUST include both timestamp and transformation, in alphabetical order
+  const toSign = `timestamp=${timestamp}&transformation=w_1600,c_limit`;
   const signature = crypto.createHash('sha1').update(toSign + apiSecret).digest('hex');
   res.json({ signature, timestamp, api_key: apiKey, cloud_name: cloudName });
 });
@@ -213,9 +214,11 @@ app.post('/api/upload-cloudinary', async (req, res) => {
     const ts = Math.floor(Date.now() / 1000);
     addField('api_key', apiKey);
     addField('timestamp', String(ts));
-    // Signature should only include timestamp, NOT transformation
-    const toSign = `timestamp=${ts}`;
+    // Signature MUST include both timestamp and transformation, in alphabetical order
+    // sha1("timestamp=<ts>&transformation=w_1600,c_limit" + apiSecret)
+    const toSign = `timestamp=${ts}&transformation=w_1600,c_limit`;
     const signature = crypto.createHash('sha1').update(toSign + apiSecret).digest('hex');
+    console.log('Server signature calculation:', { toSign, signature, apiSecret: apiSecret.substring(0, 5) + '...' });
     addField('signature', signature);
     addField('transformation', 'w_1600,c_limit');
 

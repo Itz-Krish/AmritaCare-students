@@ -2018,47 +2018,77 @@ async function uploadFileToCloudinarySigned(file){
   const cloudName = cfg.cloud_name;
   const uploadPreset = cfg.upload_preset;
   const url = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
-
-  // If upload_preset is provided, perform an unsigned upload (no signature required)
-  if(uploadPreset){
+  // Helper to perform a signed upload when signature data is available
+  function doSignedUpload(sigData){
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url);
       const fd = new FormData();
       fd.append('file', file);
-      fd.append('upload_preset', uploadPreset);
+      fd.append('api_key', sigData.api_key || '');
+      fd.append('timestamp', sigData.timestamp || '');
+      fd.append('signature', sigData.signature || '');
       fd.append('transformation', JSON.stringify([{ width: 1600, crop: 'limit' }]));
 
-  xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); if(fileNameEl) fileNameEl.textContent = `Uploading: ${pct}%`; } };
-      xhr.onload = function(){ if(xhr.status >= 200 && xhr.status < 300){ try{ const resp = JSON.parse(xhr.responseText); if(fileNameEl) fileNameEl.textContent = 'No file chosen'; resolve(resp); }catch(e){ resolve({ url: xhr.responseText }); } } else { reject(new Error('Unsigned upload failed: ' + xhr.statusText)); } };
+      xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); if(fileNameEl) fileNameEl.textContent = `Uploading: ${pct}%`; } };
+      xhr.onload = function(){
+        if(xhr.status >= 200 && xhr.status < 300){
+          try{ const resp = JSON.parse(xhr.responseText); if(fileNameEl) fileNameEl.textContent = 'No file chosen'; resolve(resp); }catch(e){ resolve({ url: xhr.responseText }); }
+        } else {
+          console.error('Signed upload failed:', xhr.status, xhr.statusText, xhr.responseText);
+          reject(new Error('Signed upload failed: ' + (xhr.statusText || xhr.status) + ' - ' + xhr.responseText));
+        }
+      };
       xhr.onerror = function(){ reject(new Error('Upload network error')); };
       xhr.send(fd);
     });
   }
 
-  // Otherwise request server-signed params and perform signed upload
+  // If upload_preset is provided, try an unsigned upload first. If that fails (bad request),
+  // automatically retry using a server-signed upload (handles presets that are not configured as unsigned).
+  if(uploadPreset){
+    try{
+      const unsignedResp = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('upload_preset', uploadPreset);
+        fd.append('transformation', JSON.stringify([{ width: 1600, crop: 'limit' }]));
+
+        xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); if(fileNameEl) fileNameEl.textContent = `Uploading: ${pct}%`; } };
+        xhr.onload = function(){
+          if(xhr.status >= 200 && xhr.status < 300){
+            try{ const resp = JSON.parse(xhr.responseText); if(fileNameEl) fileNameEl.textContent = 'No file chosen'; resolve(resp); }catch(e){ resolve({ url: xhr.responseText }); }
+          } else {
+            console.warn('Unsigned upload failed:', xhr.status, xhr.statusText, xhr.responseText);
+            reject({ status: xhr.status, statusText: xhr.statusText, body: xhr.responseText });
+          }
+        };
+        xhr.onerror = function(){ reject(new Error('Upload network error')); };
+        xhr.send(fd);
+      });
+      return unsignedResp;
+    }catch(unsignedErr){
+      // If unsigned upload failed with a Bad Request, attempt signed upload automatically
+      console.warn('Unsigned upload failed, attempting server-signed upload', unsignedErr);
+      try{
+        const sigResp = await fetch('/api/cloudinary-sign', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ filename: file.name }) });
+        if(!sigResp.ok) throw new Error('Signature request failed');
+        const sigData = await sigResp.json();
+        return await doSignedUpload(sigData);
+      }catch(signedErr){
+        console.error('Signed retry after unsigned failure also failed', signedErr);
+        throw signedErr;
+      }
+    }
+  }
+
+  // No upload preset provided: perform a signed upload (normal flow)
   const sigResp = await fetch('/api/cloudinary-sign', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ filename: file.name }) });
   if(!sigResp.ok) throw new Error('Signature request failed');
   const sigData = await sigResp.json();
-  const apiKey = sigData.api_key;
-  const timestamp = sigData.timestamp;
-  const signature = sigData.signature;
-
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', url);
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('api_key', apiKey);
-    fd.append('timestamp', timestamp);
-    fd.append('signature', signature);
-    fd.append('transformation', JSON.stringify([{ width: 1600, crop: 'limit' }]));
-
-  xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); if(fileNameEl) fileNameEl.textContent = `Uploading: ${pct}%`; } };
-    xhr.onload = function(){ if(xhr.status >= 200 && xhr.status < 300){ try{ const resp = JSON.parse(xhr.responseText); if(fileNameEl) fileNameEl.textContent = 'No file chosen'; resolve(resp); }catch(e){ resolve({ url: xhr.responseText }); } } else { reject(new Error('Upload failed: ' + xhr.statusText)); } };
-    xhr.onerror = function(){ reject(new Error('Upload network error')); };
-    xhr.send(fd);
-  });
+  return await doSignedUpload(sigData);
 }
 
 /* CONTACT FORM */

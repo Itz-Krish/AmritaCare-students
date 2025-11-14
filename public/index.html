@@ -2009,8 +2009,8 @@ async function uploadFileToCloudinarySigned(file){
       fd.append('upload_preset', uploadPreset);
       fd.append('transformation', JSON.stringify([{ width: 1600, crop: 'limit' }]));
 
-      xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); fileNameEl.textContent = `Uploading: ${pct}%`; } };
-      xhr.onload = function(){ if(xhr.status >= 200 && xhr.status < 300){ try{ const resp = JSON.parse(xhr.responseText); resolve(resp); }catch(e){ resolve({ url: xhr.responseText }); } } else { reject(new Error('Unsigned upload failed: ' + xhr.statusText)); } };
+  xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); if(fileNameEl) fileNameEl.textContent = `Uploading: ${pct}%`; } };
+      xhr.onload = function(){ if(xhr.status >= 200 && xhr.status < 300){ try{ const resp = JSON.parse(xhr.responseText); if(fileNameEl) fileNameEl.textContent = 'No file chosen'; resolve(resp); }catch(e){ resolve({ url: xhr.responseText }); } } else { reject(new Error('Unsigned upload failed: ' + xhr.statusText)); } };
       xhr.onerror = function(){ reject(new Error('Upload network error')); };
       xhr.send(fd);
     });
@@ -2034,8 +2034,8 @@ async function uploadFileToCloudinarySigned(file){
     fd.append('signature', signature);
     fd.append('transformation', JSON.stringify([{ width: 1600, crop: 'limit' }]));
 
-    xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); fileNameEl.textContent = `Uploading: ${pct}%`; } };
-    xhr.onload = function(){ if(xhr.status >= 200 && xhr.status < 300){ try{ const resp = JSON.parse(xhr.responseText); resolve(resp); }catch(e){ resolve({ url: xhr.responseText }); } } else { reject(new Error('Upload failed: ' + xhr.statusText)); } };
+  xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); if(fileNameEl) fileNameEl.textContent = `Uploading: ${pct}%`; } };
+    xhr.onload = function(){ if(xhr.status >= 200 && xhr.status < 300){ try{ const resp = JSON.parse(xhr.responseText); if(fileNameEl) fileNameEl.textContent = 'No file chosen'; resolve(resp); }catch(e){ resolve({ url: xhr.responseText }); } } else { reject(new Error('Upload failed: ' + xhr.statusText)); } };
     xhr.onerror = function(){ reject(new Error('Upload network error')); };
     xhr.send(fd);
   });
@@ -3057,7 +3057,11 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
       // Mark message as reported
       await update(chatRef, { reported: true });
       alert('Reported. Admins will review.');
-    }catch(err){ console.error(err); alert('Report failed'); }
+    }catch(err){ 
+      console.error('[DEBUG] reportChat error:', err); 
+      const msg = (err && err.code === 'PERMISSION_DENIED') ? 'Report failed: Permission denied — check Firebase rules.' : 'Report failed: ' + (err.message || 'unknown error');
+      alert(msg); 
+    }
   };
 
   // Admin: listen to reports

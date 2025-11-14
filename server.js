@@ -40,6 +40,7 @@ try{ const envMsgs = JSON.parse(process.env.CHAT_MESSAGES || '[]'); if(Array.isA
 
 // Optional: initialize Firebase Admin SDK if service account provided (base64 JSON or raw JSON string)
 let _adminDb = null;
+let _adminIsRealtime = false;
 try{
   const saEnv = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 || process.env.FIREBASE_SERVICE_ACCOUNT || '';
   if(saEnv && String(saEnv).trim()){
@@ -49,9 +50,27 @@ try{
       else saObj = JSON.parse(Buffer.from(saEnv, 'base64').toString('utf8'));
     }catch(e){ console.warn('Failed to parse FIREBASE service account JSON from env', e); }
     if(saObj){
-      admin.initializeApp({ credential: admin.credential.cert(saObj) });
-      _adminDb = admin.firestore();
-      console.log('✅ Firebase Admin initialized for server-side Firestore persistence');
+      // If a realtime DB URL is provided in env, prefer initializing Admin with databaseURL
+      const dbUrl = process.env.FIREBASE_DATABASE_URL || process.env.VITE_FIREBASE_DATABASE_URL || '';
+      const adminInit = { credential: admin.credential.cert(saObj) };
+      if(dbUrl) adminInit.databaseURL = dbUrl;
+      admin.initializeApp(adminInit);
+      if(dbUrl){
+        try{
+          _adminDb = admin.database();
+          _adminIsRealtime = true;
+          console.log('✅ Firebase Admin initialized for server-side Realtime Database (RTDB) persistence');
+        }catch(e){
+          console.warn('Failed to initialize Admin RTDB, falling back to Firestore', e);
+          _adminDb = admin.firestore();
+          _adminIsRealtime = false;
+          console.log('✅ Firebase Admin initialized for server-side Firestore persistence');
+        }
+      } else {
+        _adminDb = admin.firestore();
+        _adminIsRealtime = false;
+        console.log('✅ Firebase Admin initialized for server-side Firestore persistence');
+      }
     }
   }
 }catch(e){ console.warn('Firebase Admin initialization error', e); }
@@ -61,7 +80,8 @@ app.get('/api/debug-admin', (req, res) => {
   try{
     const saPresent = !!(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 || process.env.FIREBASE_SERVICE_ACCOUNT);
     const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || null;
-    return res.json({ success: true, adminInitialized: !!_adminDb, serviceAccountPresent: saPresent, projectId: projectId || 'not-set' });
+    const dbType = _adminDb ? (_adminIsRealtime ? 'realtime' : 'firestore') : 'none';
+    return res.json({ success: true, adminInitialized: !!_adminDb, databaseType: dbType, serviceAccountPresent: saPresent, projectId: projectId || 'not-set' });
   }catch(err){
     console.error('debug-admin error', err);
     return res.status(500).json({ success: false, error: 'debug_failed' });
@@ -82,14 +102,18 @@ app.post('/api/messages', async (req, res) => {
     // If Admin SDK configured, persist into Firestore 'chats' collection for production persistence
     if(_adminDb){
       try{
-        const docRef = await _adminDb.collection('chats').add({ from: msg.from, email: msg.email, text: msg.text, timestamp: admin.firestore.FieldValue.serverTimestamp() });
-        // Use Firestore doc id as canonical id when available
-        if(docRef && docRef.id){
-          msg.id = docRef.id;
-          // update in-memory store to reflect canonical id
-          _chatMessages[_chatMessages.length-1] = msg;
+        if(_adminIsRealtime){
+          // push to RTDB under 'chats'
+          const ref = _adminDb.ref('chats');
+          const newRef = ref.push();
+          const payload = { from: msg.from, email: msg.email, text: msg.text, timestamp: msg.timestamp };
+          await newRef.set(payload);
+          if(newRef.key){ msg.id = newRef.key; _chatMessages[_chatMessages.length-1] = msg; }
+        } else {
+          const docRef = await _adminDb.collection('chats').add({ from: msg.from, email: msg.email, text: msg.text, timestamp: admin.firestore.FieldValue.serverTimestamp() });
+          if(docRef && docRef.id){ msg.id = docRef.id; _chatMessages[_chatMessages.length-1] = msg; }
         }
-      }catch(e){ console.warn('Failed to persist message to Firestore via Admin SDK', e); }
+      }catch(e){ console.warn('Failed to persist message via Admin SDK', e); }
     }
 
     return res.json({ success: true, message: 'Message saved', id: msg.id });
@@ -100,16 +124,30 @@ app.get('/api/messages', (req, res) => {
   try{
     // If Admin SDK is configured, read the latest 30 messages from Firestore for canonical data
     if(_adminDb){
-      return _adminDb.collection('chats').orderBy('timestamp','desc').limit(30).get().then(snapshot => {
-        const msgs = [];
-        snapshot.forEach(d => {
-          const data = d.data();
-          msgs.push({ id: d.id, from: data.from || null, email: data.email || null, text: data.text || null, ts: (data.timestamp && data.timestamp.toDate) ? data.timestamp.toDate().toLocaleTimeString() : '', timestamp: data.timestamp ? (data.timestamp.seconds ? data.timestamp.seconds * 1000 : Date.now()) : Date.now() });
-        });
-        // reverse to oldest-first
-        msgs.reverse();
-        return res.json({ success: true, messages: msgs, count: msgs.length });
-      }).catch(err => { console.error('❌ /api/messages GET firestore error', err); return res.status(500).json({ success: false, messages: [], count: 0 }); });
+        if(_adminIsRealtime){
+          // Read last 30 messages from RTDB (ordered by timestamp ascending)
+          try{
+            const dbRef = _adminDb.ref('chats');
+            // Use once to get snapshot; limitToLast to get newest
+            const snap = await dbRef.orderByChild('timestamp').limitToLast(30).once('value');
+            const data = snap.val() || {};
+            const msgs = Object.keys(data).map(k => ({ id: k, from: data[k].from || null, email: data[k].email || null, text: data[k].text || null, ts: (data[k].timestamp ? new Date(data[k].timestamp).toLocaleTimeString() : ''), timestamp: data[k].timestamp || Date.now() }));
+            // sort oldest-first
+            msgs.sort((a,b)=> (a.timestamp||0)-(b.timestamp||0));
+            return res.json({ success: true, messages: msgs, count: msgs.length });
+          }catch(err){ console.error('❌ /api/messages GET rtdb error', err); return res.status(500).json({ success: false, messages: [], count: 0 }); }
+        } else {
+          return _adminDb.collection('chats').orderBy('timestamp','desc').limit(30).get().then(snapshot => {
+            const msgs = [];
+            snapshot.forEach(d => {
+              const data = d.data();
+              msgs.push({ id: d.id, from: data.from || null, email: data.email || null, text: data.text || null, ts: (data.timestamp && data.timestamp.toDate) ? data.timestamp.toDate().toLocaleTimeString() : '', timestamp: data.timestamp ? (data.timestamp.seconds ? data.timestamp.seconds * 1000 : Date.now()) : Date.now() });
+            });
+            // reverse to oldest-first
+            msgs.reverse();
+            return res.json({ success: true, messages: msgs, count: msgs.length });
+          }).catch(err => { console.error('❌ /api/messages GET firestore error', err); return res.status(500).json({ success: false, messages: [], count: 0 }); });
+        }
     }
     return res.json({ success: true, messages: _chatMessages.slice(-30), count: _chatMessages.length });
   }
@@ -126,6 +164,8 @@ app.get('/api/firebase-config', (req, res) => {
     apiKey: process.env.VITE_FIREBASE_API_KEY || process.env.FIREBASE_API_KEY || '',
     authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN || process.env.FIREBASE_AUTH_DOMAIN || '',
     projectId: process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || '',
+    // Realtime Database URL (used by client RTDB initialization)
+    databaseURL: process.env.VITE_FIREBASE_DATABASE_URL || process.env.FIREBASE_DATABASE_URL || '',
     storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET || '',
     messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || process.env.FIREBASE_MESSAGING_SENDER_ID || '',
     appId: process.env.VITE_FIREBASE_APP_ID || process.env.FIREBASE_APP_ID || ''

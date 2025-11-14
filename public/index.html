@@ -2772,11 +2772,10 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
 </script>
 
 <script type="module">
-  // Firebase integration: Auth + Firestore for chat, reports, admin
+  // Firebase integration: Auth + Realtime Database (RTDB) for chat, reports, admin
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-app.js";
   import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, sendEmailVerification, EmailAuthProvider, reauthenticateWithCredential, updatePassword } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-auth.js";
-  import { getFirestore, initializeFirestore, collection, addDoc, doc, setDoc, getDoc, onSnapshot, query, orderBy, serverTimestamp, deleteDoc, limit, where } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-firestore.js";
-  import { persistentLocalCache } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-firestore.js";
+  import { getDatabase, ref, push, set, get, onValue, off, update, remove, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-database.js";
 
   // Fetch Firebase config from server (kept out of public code for security)
   let firebaseConfig = null;
@@ -2804,9 +2803,9 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
     // indicate Firebase handlers are active so legacy local handlers skip
     window._useFirebaseAuth = true;
     const auth = getAuth(app);
-    // Initialize Firestore with persistent local cache for offline support and faster loads
-    const db = initializeFirestore(app, { localCache: persistentLocalCache() });
-    console.log('[DEBUG] Firestore initialized with persistent local cache');
+    // Initialize Realtime Database (RTDB) instead of Firestore
+    const db = getDatabase(app);
+    console.log('[DEBUG] Firebase Realtime Database initialized');
     // expose firebase objects for legacy handlers
     window._firebase = { app, auth, db };
     console.log('[DEBUG] window._firebase set', !!window._firebase && !!window._firebase.auth && !!window._firebase.db);
@@ -2815,21 +2814,25 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
   let unsubscribeChats = null;
   let unsubscribeReports = null;
 
-  // helper to convert Firestore timestamp
-  function formatTs(ts){ try{ if(!ts) return ''; const d = ts.toDate ? ts.toDate() : new Date(ts); return d.toLocaleTimeString(); }catch(e){ return ''; } }
+  // helper to convert RTDB timestamp
+  function formatTs(ts){ try{ if(!ts) return ''; const d = new Date(ts); return d.toLocaleTimeString(); }catch(e){ return ''; } }
 
-  // Override sendChatMessage to write to Firestore with instant local rendering
+  // Override sendChatMessage to write to RTDB with instant local rendering
   window.sendChatMessage = async function(){
     const user = auth.currentUser;
     console.log('[DEBUG] window.sendChatMessage called, auth.currentUser:', user && user.email);
     if(!user){ openAuth('login'); return; }
     // check banned
-    const bannedDoc = await getDoc(doc(db,'banned', user.uid));
-    if(bannedDoc.exists()){
-      alert('Your account has been banned.');
-      await signOut(auth);
-      return;
-    }
+    try{
+      const bannedRef = ref(db, `banned/${user.uid}`);
+      const bannedSnap = await get(bannedRef);
+      if(bannedSnap.exists()){
+        alert('Your account has been banned.');
+        await signOut(auth);
+        return;
+      }
+    }catch(e){ console.warn('Failed to check ban status', e); }
+    
     const txt = document.getElementById('messageInput').value.trim();
     if(!txt) return;
     
@@ -2837,7 +2840,7 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
     const chatWindow = document.getElementById('chatWindow');
     
     try{
-      // Create local message instantly (before Firestore commit)
+      // Create local message instantly (before RTDB commit)
       const localMsg = {
         id: 'local_' + Date.now() + '_' + Math.random().toString(36).slice(2,8),
         from: user.displayName || user.email.split('@')[0],
@@ -2850,31 +2853,36 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
         reported: false
       };
       
-      // Render message locally immediately (no wait for Firestore)
+      // Render message locally immediately (no wait for RTDB)
       window.chatMessages = window.chatMessages || [];
       window.chatMessages.push(localMsg);
       renderChatMessages();
       messageInput.value = '';
       
-      // Now send to Firestore (async, doesn't block UI)
+      // Now send to RTDB (async, doesn't block UI)
       const payload = {
         uid: user.uid,
         from: localMsg.from,
         email: user.email,
         text: txt,
-        timestamp: serverTimestamp()
+        timestamp: Date.now()
       };
-      console.debug('[DEBUG] Firestore write payload (chats):', payload);
-      const docRef = await addDoc(collection(db,'chats'), payload);
+      console.debug('[DEBUG] RTDB write payload (chats):', payload);
       
-      // Once Firestore confirms, update message ID and remove pending flag
+      // Push to chats node, get the key
+      const chatsRef = ref(db, 'chats');
+      const newMsgRef = push(chatsRef);
+      const msgKey = newMsgRef.key;
+      await set(newMsgRef, payload);
+      
+      // Once RTDB confirms, update message ID and remove pending flag
       const msgIdx = window.chatMessages.findIndex(m => m.id === localMsg.id);
       if(msgIdx >= 0){
-        window.chatMessages[msgIdx].id = docRef.id;
+        window.chatMessages[msgIdx].id = msgKey;
         window.chatMessages[msgIdx].pending = false;
         renderChatMessages();
       }
-      console.debug('[DEBUG] Message confirmed by Firestore with id:', docRef.id);
+      console.debug('[DEBUG] Message confirmed by RTDB with key:', msgKey);
     }catch(err){
       console.error('[DEBUG] sendChatMessage failed:', err);
       // Mark as failed in UI
@@ -2900,9 +2908,9 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
             return res;
           }catch(err){
             console.error('[DEBUG] sendChatMessage failed', err);
-            // If permissions prevented the write, fall back to server-side persistence so UX isn't blocked.
+            // If RTDB write fails, fall back to server-side persistence so UX isn't blocked.
             try{
-              const permDenied = err && (err.code === 'permission-denied' || (err.message && err.message.indexOf('permission-denied') !== -1));
+              const permDenied = err && (err.code === 'PERMISSION_DENIED' || (err.message && err.message.indexOf('PERMISSION_DENIED') !== -1));
               if(permDenied){
                 console.warn('[DEBUG] sendChatMessage permission denied — falling back to server POST');
                 // Use fallbackSend if available (defined earlier in page), otherwise manual POST
@@ -2927,57 +2935,64 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
       }
     }catch(e){ console.warn('Could not wrap sendChatMessage for debug', e); }
 
-  // start listening to latest 50 chats — use docChanges() for real-time incremental updates (no lag)
+  // start listening to latest chats — use onValue for real-time updates from RTDB
   function startChatListener(){
     if(unsubscribeChats) return;
-    console.log('[DEBUG] startChatListener - setting up listener on chats collection with docChanges()');
-    // Allow null timestamps (pending messages) at start; Firestore auto-orders them there
-    const q = query(collection(db,'chats'), orderBy('timestamp','asc'), limit(50));
+    console.log('[DEBUG] startChatListener - setting up listener on chats ref');
+    const chatsRef = ref(db, 'chats');
     try{
-      unsubscribeChats = onSnapshot(q, snap => {
-        console.log('[DEBUG] Firestore chat snapshot received, docs:', snap.size);
-        // Use docChanges() for real-time incremental updates — messages appear instantly without re-rendering entire list
+      unsubscribeChats = onValue(chatsRef, snap => {
+        console.log('[DEBUG] RTDB chats snapshot received');
         window.chatMessages = window.chatMessages || [];
-        snap.docChanges().forEach((change) => {
-          const d = change.doc;
-          const data = d.data();
-          const msg = { id: d.id, from: data.from, email: data.email, text: data.text, ts: formatTs(data.timestamp), timestamp: data.timestamp, uid: data.uid, reported: data.reported || false };
-          
-          if (change.type === 'added') {
-            // New message: append to list
-            const exists = window.chatMessages.findIndex(m => m.id === msg.id) >= 0;
-            if (!exists) window.chatMessages.push(msg);
-            console.debug('[DEBUG] docChange: added message id:', d.id);
-          } else if (change.type === 'modified') {
-            // Modified message: update in-place
-            const idx = window.chatMessages.findIndex(m => m.id === msg.id);
-            if (idx >= 0) window.chatMessages[idx] = msg;
-            console.debug('[DEBUG] docChange: modified message id:', d.id);
-          } else if (change.type === 'removed') {
-            // Deleted message: remove from list
-            window.chatMessages = window.chatMessages.filter(m => m.id !== msg.id);
-            console.debug('[DEBUG] docChange: removed message id:', d.id);
-          }
+        
+        if(!snap.exists()){
+          console.log('[DEBUG] No chats in RTDB yet');
+          return;
+        }
+        
+        // RTDB returns object with keys as message IDs
+        const data = snap.val();
+        const allMsgs = [];
+        Object.keys(data || {}).forEach(msgId => {
+          const msgData = data[msgId];
+          const msg = { 
+            id: msgId, 
+            from: msgData.from, 
+            email: msgData.email, 
+            text: msgData.text, 
+            ts: formatTs(msgData.timestamp), 
+            timestamp: msgData.timestamp, 
+            uid: msgData.uid, 
+            reported: msgData.reported || false 
+          };
+          allMsgs.push(msg);
         });
-        // Keep only last 50 messages in memory to avoid huge arrays
-        if(window.chatMessages.length > 50) window.chatMessages = window.chatMessages.slice(-50);
-        // docChanges() pattern automatically updates messages in real-time
-        // No need to check for empty snapshot — listener adds/modifies/removes messages incrementally
-        // Render after each batch of changes
+        
+        // Sort by timestamp ascending
+        allMsgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        
+        // Keep only last 50 messages
+        if(allMsgs.length > 50) allMsgs = allMsgs.slice(-50);
+        
+        // Replace window.chatMessages with sorted list
+        window.chatMessages = allMsgs;
+        console.log('[DEBUG] Updated messages list with', window.chatMessages.length, 'messages');
+        
+        // Render after changes
         try{ const s = document.getElementById('chatStatus'); if(s) s.textContent = ''; }catch(e){}
         renderChatMessages();
     }, err=> {
-      console.error('[DEBUG] Firestore chat listener error:', err && err.code ? err.code : 'unknown', err && err.message ? err.message : '');
+      console.error('[DEBUG] RTDB chat listener error:', err && err.code ? err.code : 'unknown', err && err.message ? err.message : '');
       try{
         const s = document.getElementById('chatStatus') || (function(){ const el = document.createElement('div'); el.id='chatStatus'; el.style.padding='8px'; el.style.background='#fff3cd'; el.style.color='#856404'; el.style.border='1px solid #ffeeba'; el.style.borderRadius='6px'; el.style.position='fixed'; el.style.right='12px'; el.style.bottom='12px'; el.style.zIndex=9999; document.body.appendChild(el); return el; })();
-        const msg = (err && err.code === 'permission-denied') ? '🔒 Chat read denied — check Firestore rules.' : 'Firestore chat error — using server fallback.';
+        const msg = (err && err.code === 'PERMISSION_DENIED') ? '🔒 Chat read denied — check RTDB rules.' : 'RTDB chat error — using server fallback.';
         s.textContent = msg;
       }catch(e2){ console.warn('Failed to render chat status', e2); }
       // fallback: stop listener and try server-side messages, then local
       if(unsubscribeChats){ unsubscribeChats(); unsubscribeChats = null; }
       (async ()=>{
         try{
-          console.log('[DEBUG] Attempting /api/messages fallback after Firestore error');
+          console.log('[DEBUG] Attempting /api/messages fallback after RTDB error');
           const resp = await fetch('/api/messages');
           if(resp && resp.ok){ const j = await resp.json(); if(j && j.success && Array.isArray(j.messages)){ console.log('[DEBUG] /api/messages fallback returned', j.messages.length, 'messages'); window.chatMessages = j.messages; renderChatMessages(); return; } }
         }catch(e){ console.debug('Failed to fetch /api/messages fallback', e); }
@@ -2996,17 +3011,33 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
 
   function stopChatListener(){ if(unsubscribeChats){ unsubscribeChats(); unsubscribeChats = null; } }
 
-  // report chat -> add to reports collection and mark chat
+  // report chat -> add to reports node and mark chat
   window.reportChat = async function(msgId){
     const user = auth.currentUser; if(!user){ openAuth('login'); return; }
     console.debug('[DEBUG] reportChat: looking for msgId:', msgId);
     try{
-      const chatRef = doc(db,'chats', msgId);
-      const chatSnap = await getDoc(chatRef);
+      const chatRef = ref(db, `chats/${msgId}`);
+      const chatSnap = await get(chatRef);
       if(!chatSnap.exists()){ console.warn('[DEBUG] reportChat: doc not found for id:', msgId); alert('Message not found'); return; }
-      const data = chatSnap.data();
-      await addDoc(collection(db,'reports'), { msgId, chatText: data.text, from: data.from, email: data.email, uid: data.uid || null, reportedBy: user.email, reportedAt: serverTimestamp() });
-      await setDoc(chatRef, { reported: true }, { merge: true });
+      const data = chatSnap.val();
+      
+      // Create report entry
+      const reportPayload = { 
+        msgId, 
+        chatText: data.text, 
+        from: data.from, 
+        email: data.email, 
+        uid: data.uid || null, 
+        reportedBy: user.email, 
+        reportedAt: Date.now() 
+      };
+      
+      const reportsRef = ref(db, 'reports');
+      const newReportRef = push(reportsRef);
+      await set(newReportRef, reportPayload);
+      
+      // Mark message as reported
+      await update(chatRef, { reported: true });
       alert('Reported. Admins will review.');
     }catch(err){ console.error(err); alert('Report failed'); }
   };
@@ -3014,10 +3045,18 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
   // Admin: listen to reports
   function startReportsListener(){
     if(unsubscribeReports) return;
-    const q = query(collection(db,'reports'), orderBy('reportedAt','desc'));
-    unsubscribeReports = onSnapshot(q, snap => {
+    const reportsRef = ref(db, 'reports');
+    unsubscribeReports = onValue(reportsRef, snap => {
       const rows = [];
-      snap.forEach(d=> rows.push({ id: d.id, ...d.data() }));
+      if(snap.exists()){
+        const data = snap.val();
+        Object.keys(data).forEach(reportId => {
+          rows.push({ id: reportId, ...data[reportId] });
+        });
+      }
+      // Sort by reportedAt descending (newest first)
+      rows.sort((a, b) => (b.reportedAt || 0) - (a.reportedAt || 0));
+      
       // render admin content
       const container = document.getElementById('adminContent');
       if(!container) return;
@@ -3028,7 +3067,7 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
         row.className = 'p-3 mb-3 border rounded';
         row.innerHTML = `
           <div class="text-sm font-semibold">${escapeHtml(r.from)} <span class="text-xs muted">(${escapeHtml(r.email)})</span></div>
-          <div class="text-xs muted">${new Date((r.reportedAt && r.reportedAt.toDate) ? r.reportedAt.toDate() : Date.now()).toLocaleString()}</div>
+          <div class="text-xs muted">${new Date(r.reportedAt || Date.now()).toLocaleString()}</div>
           <div class="mt-2 text-sm">${escapeHtml(r.chatText)}</div>
           <div class="mt-3 flex gap-2">
             <button class="admin-delete px-2 py-1 rounded bg-red-600 text-white" data-msg="${escapeHtml(r.msgId)}" data-report="${r.id}">Delete Chat</button>
@@ -3042,30 +3081,32 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
       Array.from(container.querySelectorAll('.admin-delete')).forEach(b=> b.addEventListener('click', async ()=>{
         const msgId = b.dataset.msg; const reportId = b.dataset.report;
         if(!confirm('Delete this chat for everyone?')) return;
-        try{ await deleteDoc(doc(db,'chats',msgId)); await deleteDoc(doc(db,'reports',reportId)); alert('Deleted'); }
+        try{ 
+          await remove(ref(db, `chats/${msgId}`)); 
+          await remove(ref(db, `reports/${reportId}`)); 
+          alert('Deleted'); 
+        }
         catch(e){ console.error(e); alert('Failed to delete'); }
       }));
       Array.from(container.querySelectorAll('.admin-ban')).forEach(b=> b.addEventListener('click', async ()=>{
         const email = b.dataset.email; const uid = b.dataset.uid;
         if(!confirm('Ban user '+email+'?')) return;
         try{
-          if(uid){ await setDoc(doc(db,'banned', uid), { email, bannedAt: serverTimestamp() }); }
-          else { await addDoc(collection(db,'banned'), { email, bannedAt: serverTimestamp() }); }
-          // remove chat & related reports
-          // admin will see changes via listeners
+          if(uid){ await set(ref(db, `banned/${uid}`), { email, bannedAt: Date.now() }); }
+          else { await set(ref(db, `banned/${email}`), { email, bannedAt: Date.now() }); }
           alert('User banned.');
         }catch(e){ console.error(e); alert('Failed to ban'); }
       }));
       Array.from(container.querySelectorAll('.admin-dismiss')).forEach(b=> b.addEventListener('click', async ()=>{
-        const reportId = b.dataset.report; try{ await deleteDoc(doc(db,'reports', reportId)); }catch(e){ console.error(e); }
+        const reportId = b.dataset.report; try{ await remove(ref(db, `reports/${reportId}`)); }catch(e){ console.error(e); }
       }));
     }, err=> console.error('reports listener', err));
   }
   function stopReportsListener(){ if(unsubscribeReports){ unsubscribeReports(); unsubscribeReports=null; } }
 
-  // admin check: check 'admins' collection document with uid
-  window.checkIsAdmin = async function(uid){ if(!uid) return false; const snap = await getDoc(doc(db,'admins', uid)); return snap.exists(); };
-  async function checkIsAdmin(uid){ if(!uid) return false; const snap = await getDoc(doc(db,'admins', uid)); return snap.exists(); }
+  // admin check: check 'admins' ref node with uid
+  window.checkIsAdmin = async function(uid){ if(!uid) return false; const snap = await get(ref(db, `admins/${uid}`)); return snap.exists(); };
+  async function checkIsAdmin(uid){ if(!uid) return false; const snap = await get(ref(db, `admins/${uid}`)); return snap.exists(); }
 
   // on auth state change
   onAuthStateChanged(auth, async (user) => {
@@ -3073,29 +3114,29 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
     if(user){
       // check banned (wrap in try/catch so a read error doesn't forcibly sign the user out)
       try{
-        const bannedSnap = await getDoc(doc(db,'banned', user.uid));
+        const bannedSnap = await get(ref(db, `banned/${user.uid}`));
         if(bannedSnap && bannedSnap.exists()){
           alert('Your account is banned.'); await signOut(auth); return; }
       }catch(bErr){
         console.warn('Could not read banned status (continuing):', bErr);
       }
 
-      // require email verification OR allow OTP-verified users (OTP flow sets otpVerified in Firestore)
+      // require email verification OR allow OTP-verified users (OTP flow sets otpVerified in RTDB)
       if(user && !user.emailVerified){
         try{
-          const ud = await getDoc(doc(db, 'users', user.uid));
-          const ok = ud && ud.exists() && ud.data() && ud.data().otpVerified;
+          const ud = await get(ref(db, `users/${user.uid}`));
+          const ok = ud && ud.exists() && ud.val() && ud.val().otpVerified;
           if(!ok){
-            // If the users doc says not otpVerified, force sign out
+            // If the users node says not otpVerified, force sign out
             alert('Please verify your email address before using the site. A verification link was sent to your email.');
             await signOut(auth);
             return;
           } else {
             // user has been OTP-verified; allow login without email verification
-            console.log('User OTP-verified; allowing sign-in without emailVerified flag.', ud.data());
+            console.log('User OTP-verified; allowing sign-in without emailVerified flag.', ud.val());
           }
         }catch(e){
-          // Don't sign the user out if reading the users doc fails (e.g., security rules); log and proceed
+          // Don't sign the user out if reading the users node fails (e.g., security rules); log and proceed
           console.warn('Failed to check OTP verification status — proceeding without blocking sign-in:', e);
           // Optionally notify in-console only; avoid alert to reduce UX friction
         }
@@ -3109,7 +3150,7 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
       }
       // load user profile
       let name = user.displayName || '';
-      try{ const ud = await getDoc(doc(db,'users', user.uid)); if(ud.exists() && ud.data().name) name = ud.data().name; }catch(e){}
+      try{ const ud = await get(ref(db, `users/${user.uid}`)); if(ud.exists() && ud.val().name) name = ud.val().name; }catch(e){}
       setCurrentUser({ uid: user.uid, email: user.email, name });
       // start listeners
       try{ startChatListener(); }catch(e){ console.error('startChatListener threw', e); }
@@ -3169,7 +3210,7 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
         // Immediately update UI before waiting for onAuthStateChanged listener
         const user = cred.user;
         let name = user.displayName || '';
-        try{ const ud = await getDoc(doc(db,'users', user.uid)); if(ud.exists() && ud.data().name) name = ud.data().name; }catch(e){}
+        try{ const ud = await get(ref(db, `users/${user.uid}`)); if(ud.exists() && ud.val().name) name = ud.val().name; }catch(e){}
         setCurrentUser({ uid: user.uid, email: user.email, name });
         // Also start chat listener immediately
         try{ startChatListener(); }catch(e){ console.error('startChatListener after login failed', e); }
@@ -3226,9 +3267,9 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
                   console.log('User created:', cred.user.uid);
                   await updateProfile(cred.user, { displayName: pending.name });
                   console.log('Profile updated');
-                  // Mark the Firestore users doc as OTP-verified so onAuthStateChanged allows login
-                  await setDoc(doc(db,'users', cred.user.uid), { name: pending.name, email: pending.email, otpVerified: true, createdAt: serverTimestamp() });
-                  console.log('Firestore user doc created (otpVerified:true)');
+                  // Mark the RTDB users node as OTP-verified so onAuthStateChanged allows login
+                  await set(ref(db, `users/${cred.user.uid}`), { name: pending.name, email: pending.email, otpVerified: true, createdAt: Date.now() });
+                  console.log('RTDB user node created (otpVerified:true)');
                   // Immediately update UI before closing auth modal
                   setCurrentUser({ uid: cred.user.uid, email: cred.user.email, name: pending.name });
                   try{ startChatListener(); }catch(e){ console.error('startChatListener after signup failed', e); }
@@ -3243,8 +3284,8 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
                     try{
                       const signed = await signInWithEmailAndPassword(auth, pending.email, pending.password);
                       console.log('Signed in successfully');
-                      // Ensure users doc marks otpVerified so the auth listener won't sign the user out
-                      try{ await setDoc(doc(db,'users', signed.user.uid), { name: pending.name || signed.user.displayName || '', email: pending.email, otpVerified: true }, { merge: true }); }catch(e){ console.warn('Failed to set otpVerified on existing user', e); }
+                      // Ensure users node marks otpVerified so the auth listener won't sign the user out
+                      try{ await update(ref(db, `users/${signed.user.uid}`), { name: pending.name || signed.user.displayName || '', email: pending.email, otpVerified: true }); }catch(e){ console.warn('Failed to set otpVerified on existing user', e); }
                       // Immediately update UI before closing auth modal
                       const userName = pending.name || signed.user.displayName || '';
                       setCurrentUser({ uid: signed.user.uid, email: signed.user.email, name: userName });

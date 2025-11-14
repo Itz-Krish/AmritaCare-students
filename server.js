@@ -3,19 +3,13 @@
  * Compatible with both local development and Vercel deployment
  */
 
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import path from "path";
-import { fileURLToPath } from "url";
-import crypto from 'crypto';
-import nodemailer from 'nodemailer';
-import admin from 'firebase-admin';
-
-dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const express = require('express');
+const cors = require('cors');
+require('dotenv').config();
+const path = require('path');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+const admin = require('firebase-admin');
 
 const app = express();
 
@@ -120,7 +114,7 @@ app.post('/api/messages', async (req, res) => {
   }catch(err){ console.error('❌ /api/messages POST error', err); return res.status(500).json({ error: 'server_error', detail: err.message }); }
 });
 
-app.get('/api/messages', (req, res) => {
+app.get('/api/messages', async (req, res) => {
   try{
     // If Admin SDK is configured, read the latest 30 messages from Firestore for canonical data
     if(_adminDb){
@@ -376,5 +370,5 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
-// Export for Vercel serverless
-export default app;
+// Export for Vercel serverless (CommonJS)
+module.exports = app;

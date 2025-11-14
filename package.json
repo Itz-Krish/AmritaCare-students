@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Mental health awareness platform for students with community chat, video gallery, and support features",
   "main": "server.js",
-  "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "NODE_ENV=development node server.js",

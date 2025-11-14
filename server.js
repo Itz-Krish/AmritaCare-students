@@ -178,9 +178,9 @@ app.get('/api/cloudinary-config', (req, res) => {
 // Cloudinary sign endpoint for signed uploads (client can POST and receive signature)
 app.post('/api/cloudinary-sign', (req, res) => {
   // Prefer non-VITE env vars for secrets so they are not accidentally embedded in client builds.
-  const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.VITE_CLOUDINARY_API_SECRET;
-  const apiKey = process.env.CLOUDINARY_API_KEY || process.env.VITE_CLOUDINARY_API_KEY;
-  const cloudName = process.env.CLOUDINARY_CLOUD_NAME || process.env.VITE_CLOUDINARY_CLOUD_NAME;
+  const apiSecret = (process.env.CLOUDINARY_API_SECRET || process.env.VITE_CLOUDINARY_API_SECRET || '').trim();
+  const apiKey = (process.env.CLOUDINARY_API_KEY || process.env.VITE_CLOUDINARY_API_KEY || '').trim();
+  const cloudName = (process.env.CLOUDINARY_CLOUD_NAME || process.env.VITE_CLOUDINARY_CLOUD_NAME || '').trim();
   if (!apiSecret || !apiKey || !cloudName) {
     return res.status(500).json({ error: 'Cloudinary not configured on server' });
   }

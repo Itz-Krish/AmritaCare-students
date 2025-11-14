@@ -2028,7 +2028,7 @@ async function uploadFileToCloudinarySigned(file){
       fd.append('api_key', sigData.api_key || '');
       fd.append('timestamp', sigData.timestamp || '');
       fd.append('signature', sigData.signature || '');
-      fd.append('transformation', JSON.stringify([{ width: 1600, crop: 'limit' }]));
+      fd.append('transformation', 'w_1600,c_limit');
 
       xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); if(fileNameEl) fileNameEl.textContent = `Uploading: ${pct}%`; } };
       xhr.onload = function(){
@@ -2054,7 +2054,7 @@ async function uploadFileToCloudinarySigned(file){
         const fd = new FormData();
         fd.append('file', file);
         fd.append('upload_preset', uploadPreset);
-        fd.append('transformation', JSON.stringify([{ width: 1600, crop: 'limit' }]));
+        fd.append('transformation', 'w_1600,c_limit');
 
         xhr.upload.onprogress = function(e){ if(e.lengthComputable){ const pct = Math.round((e.loaded / e.total) * 100); if(fileNameEl) fileNameEl.textContent = `Uploading: ${pct}%`; } };
         xhr.onload = function(){

@@ -2224,11 +2224,14 @@ function renderChatMessages(){
       e.preventDefault();
       const id = b.dataset.id;
       if(!getEffectiveUser()){ openAuth('login'); return; }
+      // prompt for reason
+      const reason = prompt('Why are you reporting this message? (optional)');
+      if(reason === null) return; // user cancelled
       // If Firebase-backed reporting is present, prefer that implementation (attached to window.reportChat)
       if(window.reportChat && window.reportChat !== reportChat){
-        try{ window.reportChat(id); }catch(er){ console.error('window.reportChat failed', er); reportChat(id); }
+        try{ window.reportChat(id, reason); }catch(er){ console.error('window.reportChat failed', er); reportChat(id, reason); }
       } else {
-        reportChat(id);
+        reportChat(id, reason);
       }
     });
   });
@@ -2438,13 +2441,20 @@ function isBanned(email){ const b = getBanned(); return b.includes((email||'').t
 function addBan(email){ if(!email) return; const b = getBanned(); if(!b.includes(email.toLowerCase())){ b.push(email.toLowerCase()); localStorage.setItem(BANNED_STORAGE_KEY, JSON.stringify(b)); } }
 
 function reportChat(msgId){
+  // Allow optional reason param. If omitted, prompt the user.
+  let reason;
+  try{ reason = arguments.length > 1 ? arguments[1] : undefined; }catch(e){ reason = undefined; }
+  if(typeof reason === 'undefined'){
+    reason = prompt('Why are you reporting this message? (optional)');
+    if(reason === null) return; // user cancelled
+  }
   const msg = chatMessages.find(m=>m.id===msgId);
   if(!msg) return alert('Message not found');
   // mark in chatMessages
   msg.reported = true;
-  // store report
+  // store report (local fallback)
   const reports = JSON.parse(localStorage.getItem(REPORTS_STORAGE_KEY) || '[]');
-  reports.push({ id: 'r_'+Date.now()+'_'+Math.random().toString(36).slice(2,6), msgId: msg.id, text: msg.text, from: msg.from, email: msg.email, ts: msg.ts, reportedAt: Date.now() });
+  reports.push({ id: 'r_'+Date.now()+'_'+Math.random().toString(36).slice(2,6), msgId: msg.id, text: msg.text, from: msg.from, email: msg.email, ts: msg.ts, reportedAt: Date.now(), reason: reason || '' });
   localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(reports));
   localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages));
   renderChatMessages();
@@ -2468,6 +2478,7 @@ function renderAdminContent(){
       <div class="text-sm font-semibold">${escapeHtml(r.from)} <span class="text-xs muted">(${escapeHtml(r.email)})</span></div>
       <div class="text-xs muted">${new Date(r.reportedAt).toLocaleString()} — original: ${escapeHtml(r.ts)}</div>
       <div class="mt-2 text-sm">${escapeHtml(r.text)}</div>
+      ${r.reason ? `<div class="mt-1 text-sm muted"><strong>Reason:</strong> ${escapeHtml(r.reason || '')}</div>` : ''}
       <div class="mt-3 flex gap-2">
         <button class="admin-delete px-2 py-1 rounded bg-red-600 text-white" data-msg="${r.msgId}" data-report="${r.id}">Delete Chat</button>
         <button class="admin-ban px-2 py-1 rounded bg-gray-800 text-white" data-email="${escapeHtml(r.email)}">Ban User</button>
@@ -3013,15 +3024,21 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
 
   // report chat -> add to reports node and mark chat
   window.reportChat = async function(msgId){
+    // Accept optional reason parameter; prompt if not provided
     const user = auth.currentUser; if(!user){ openAuth('login'); return; }
-    console.debug('[DEBUG] reportChat: looking for msgId:', msgId);
+    let reason = arguments.length > 1 ? arguments[1] : undefined;
+    if(typeof reason === 'undefined'){
+      reason = prompt('Why are you reporting this message? (optional)');
+      if(reason === null) return; // cancelled
+    }
+    console.debug('[DEBUG] reportChat: looking for msgId:', msgId, 'reason:', reason);
     try{
       const chatRef = ref(db, `chats/${msgId}`);
       const chatSnap = await get(chatRef);
       if(!chatSnap.exists()){ console.warn('[DEBUG] reportChat: doc not found for id:', msgId); alert('Message not found'); return; }
       const data = chatSnap.val();
       
-      // Create report entry
+      // Create report entry (include reason)
       const reportPayload = { 
         msgId, 
         chatText: data.text, 
@@ -3029,7 +3046,8 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
         email: data.email, 
         uid: data.uid || null, 
         reportedBy: user.email, 
-        reportedAt: Date.now() 
+        reportedAt: Date.now(),
+        reason: reason || ''
       };
       
       const reportsRef = ref(db, 'reports');
@@ -3068,7 +3086,8 @@ window.addEventListener('keydown', e=> { if(e.key==='Escape'){ if(!authOverlay.c
         row.innerHTML = `
           <div class="text-sm font-semibold">${escapeHtml(r.from)} <span class="text-xs muted">(${escapeHtml(r.email)})</span></div>
           <div class="text-xs muted">${new Date(r.reportedAt || Date.now()).toLocaleString()}</div>
-          <div class="mt-2 text-sm">${escapeHtml(r.chatText)}</div>
+            <div class="mt-2 text-sm">${escapeHtml(r.chatText)}</div>
+            ${r.reason ? `<div class="mt-1 text-sm muted"><strong>Reason:</strong> ${escapeHtml(r.reason || '')}</div>` : ''}
           <div class="mt-3 flex gap-2">
             <button class="admin-delete px-2 py-1 rounded bg-red-600 text-white" data-msg="${escapeHtml(r.msgId)}" data-report="${r.id}">Delete Chat</button>
             <button class="admin-ban px-2 py-1 rounded bg-gray-800 text-white" data-email="${escapeHtml(r.email)}" data-uid="${escapeHtml(r.uid||'')}">Ban User</button>
